@@ -59,6 +59,10 @@ export function writeStdoutJson(data) {
 export function findProjectRoot(startDir) {
   let cur = path.resolve(startDir);
   while (cur && path.dirname(cur) !== cur) {
+    if (path.basename(cur) === '.agents' || cur.split(path.sep).includes('.agents')) {
+      cur = path.dirname(cur);
+      continue;
+    }
     if (fs.existsSync(path.join(cur, 'package.json')) && fs.existsSync(path.join(cur, '.git'))) {
       return cur;
     }
