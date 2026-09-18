@@ -4,8 +4,10 @@
  * Enforces Definition of Ready (DoR) before creating a topic branch:
  * 1. Working tree cleanliness (no uncommitted dirty changes).
  * 2. LoopState IDLE check (no unfinished active PR review loop).
- * 3. Why-First & Risks to Eliminate validation in docs/issues/ISSUE-XXX/issue.md.
- * 4. Impact & Duplication Check validation in docs/issues/ISSUE-XXX/pre_verification.md.
+ * 3. GitHub Issue state and DoR label (status: ready) validation.
+ * 4. Why-First & Risks to Eliminate validation in docs/issues/ISSUE-XXX/issue.md.
+ * 5. Impact & Duplication Check validation in docs/issues/ISSUE-XXX/pre_verification.md.
+ * 6. Template placeholder elimination in specification documents.
  */
 
 import fs from 'fs';
@@ -55,7 +57,79 @@ function verifyLoopStateIdle(stateMachine) {
 }
 
 /**
- * Step 3: Validates Why-First, Risk Elimination, and Acceptance Criteria definitions in issue.md.
+ * Step 3: Validates that template placeholders are not left unfilled in specification files.
+ */
+function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir) {
+  const placeholderPatterns = [
+    /\[ここに対象/i,
+    /\[ここに[^\]\r\n]*(?:記載|記述)\]/i,
+    /\[記入(?:してください)?\]/i,
+    /<!--\s*TODO/i,
+    /\bTODO:\s*(?:TBD|未定|後で書く)/i,
+    /<(?:番号|簡潔な目的|シナリオ|前提|初期状態|操作|入力|期待|不正入力|境界値|異常値|エラー|要記述|TBD)[^>]*>/i,
+    /<[ぁ-んァ-ヶー一-龠]+>/,
+    /\bYYYY-MM-DD\b/,
+    /\b(?:ADR-XXXX|ISSUE-XXX)\b/,
+  ];
+
+  for (const pattern of placeholderPatterns) {
+    if (pattern.test(content)) {
+      return {
+        decision: 'deny',
+        reason: `[BranchDoRGate Denied] Unfilled template placeholder detected in docs/issues/${targetIssueDir}/${fileName}. Fill in all specification details and remove template placeholders before creating a branch.`,
+      };
+    }
+  }
+  return { decision: 'allow' };
+}
+
+/**
+ * Step 4: Validates GitHub Issue existence, open state, and DoR label (status: ready).
+ */
+function verifyGitHubIssueStatus(exec, issueNum, projectRoot) {
+  try {
+    const out = exec(`gh issue view ${issueNum} --json state,labels`, {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (out && typeof out === 'string' && out.trim()) {
+      const data = JSON.parse(out.trim());
+      if (data.state && data.state.toUpperCase() !== 'OPEN') {
+        return {
+          decision: 'deny',
+          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} is closed (state: "${data.state}"). Cannot create a branch for a closed issue.`,
+        };
+      }
+      const labels = Array.isArray(data.labels)
+        ? data.labels.map((l) => (typeof l === 'string' ? l : l.name || ''))
+        : [];
+      const hasReadyOrInProgress = labels.some((l) => /status:\s*(?:ready|in-progress)/i.test(l));
+      if (!hasReadyOrInProgress) {
+        return {
+          decision: 'deny',
+          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not satisfy Definition of Ready (current labels: [${labels.join(', ')}]). The issue must have 'status: ready' or 'status: in-progress' label before creating a branch. (Remediation Guidance: Add 'status: ready' via 'gh issue edit ${issueNum} --add-label "status: ready"' after completing requirements.)`,
+        };
+      }
+    }
+  } catch (err) {
+    const errMsg = (err && (err.stderr || err.message || '')) + '';
+    // Gracefully bypass if gh CLI is missing or not recognized in non-auth/minimal environments
+    if (/command not found/i.test(errMsg) || /not recognized/i.test(errMsg) || /ENOENT/i.test(errMsg)) {
+      return { decision: 'allow' };
+    }
+    if (/Could not resolve to an Issue/i.test(errMsg) || /\bissue.*not found\b/i.test(errMsg) || /HTTP 404/i.test(errMsg)) {
+      return {
+        decision: 'deny',
+        reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not exist on GitHub. Create the issue on GitHub before creating a branch.`,
+      };
+    }
+  }
+  return { decision: 'allow' };
+}
+
+/**
+ * Step 5: Validates Why-First, Risk Elimination, and Acceptance Criteria definitions in issue.md.
  */
 function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
   const issueMdPath = path.resolve(issuesDir, targetIssueDir, 'issue.md');
@@ -110,11 +184,17 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
     }
   }
 
+  // Verify no template placeholders remain
+  const placeholderResult = verifyNoTemplatePlaceholders(issueContent, 'issue.md', targetIssueDir);
+  if (placeholderResult.decision === 'deny') {
+    return placeholderResult;
+  }
+
   return { decision: 'allow' };
 }
 
 /**
- * Step 4: Validates Impact & Duplication Check documentation in pre_verification.md.
+ * Step 6: Validates Impact & Duplication Check documentation in pre_verification.md.
  */
 function verifyImpactDuplicationCheck(issuesDir, targetIssueDir) {
   const preVerifPath = path.resolve(issuesDir, targetIssueDir, 'pre_verification.md');
@@ -132,6 +212,12 @@ function verifyImpactDuplicationCheck(issuesDir, targetIssueDir) {
       decision: 'deny',
       reason: `[BranchDoRGate Denied] Missing 'Impact & Duplication Check' section in ${targetIssueDir}/pre_verification.md. Audit existing codebase, utilities, and past ADRs to prevent duplicated logic or patchwork fixes before creating a branch. (Remediation Guidance: Refer to 'docs/issues/template_pre_verification.md' and document Section 3 '重複・パッチワーク点検'.)`,
     };
+  }
+
+  // Verify no template placeholders remain
+  const placeholderResult = verifyNoTemplatePlaceholders(preVerifContent, 'pre_verification.md', targetIssueDir);
+  if (placeholderResult.decision === 'deny') {
+    return placeholderResult;
   }
 
   return { decision: 'allow' };
@@ -170,10 +256,17 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
     return idleResult;
   }
 
-  // Step 3 & 4: Issue specification & DoR documentation check
+  // Step 3, 4, 5, 6: Issue specification & DoR documentation check
   const issueNumMatch = branchName.match(/issue-(\d+)/i);
   if (issueNumMatch) {
     const issueNum = parseInt(issueNumMatch[1], 10);
+
+    // Step 3: GitHub Issue existence, open state, and DoR label check
+    const ghIssueResult = verifyGitHubIssueStatus(exec, issueNum, projectRoot);
+    if (ghIssueResult.decision === 'deny') {
+      return ghIssueResult;
+    }
+
     const issuesDir = path.resolve(projectRoot, 'docs/issues');
     
     let targetIssueDir = null;
@@ -191,13 +284,13 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
       };
     }
 
-    // Step 3: Why-First & Risk Elimination check on issue.md
+    // Step 4 & 5: Why-First, Risk Elimination, and Placeholder check on issue.md
     const whyRiskResult = verifyWhyAndRiskSections(issuesDir, targetIssueDir);
     if (whyRiskResult.decision === 'deny') {
       return whyRiskResult;
     }
 
-    // Step 4: Impact & Duplication Check in pre_verification.md
+    // Step 6: Impact & Duplication Check and Placeholder check in pre_verification.md
     const impactResult = verifyImpactDuplicationCheck(issuesDir, targetIssueDir);
     if (impactResult.decision === 'deny') {
       return impactResult;

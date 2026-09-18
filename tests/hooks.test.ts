@@ -336,6 +336,97 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       expect(result8.decision).toBe('allow');
     });
 
+    it('denies curl commands executed without timeout', () => {
+      const result1 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'curl https://api.github.com' },
+        },
+      });
+      expect(result1.decision).toBe('deny');
+      expect(result1.reason).toContain("Network command 'curl' executed without timeout");
+      expect(result1.reason).toContain('--max-time');
+
+      const result2 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'curl.exe http://localhost:8080/health' },
+        },
+      });
+      expect(result2.decision).toBe('deny');
+      expect(result2.reason).toContain("Network command 'curl' executed without timeout");
+
+      const result3 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'sudo curl https://example.com' },
+        },
+      });
+      expect(result3.decision).toBe('deny');
+      expect(result3.reason).toContain("Network command 'curl' executed without timeout");
+
+      // Verify that -m in URLs or file names does not falsely satisfy the timeout requirement
+      const result4 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'curl https://api.github.com/repos/owner/repo-m10/commits' },
+        },
+      });
+      expect(result4.decision).toBe('deny');
+      expect(result4.reason).toContain("Network command 'curl' executed without timeout");
+
+      const result5 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'curl -o output-m20.json https://example.com/data' },
+        },
+      });
+      expect(result5.decision).toBe('deny');
+      expect(result5.reason).toContain("Network command 'curl' executed without timeout");
+    });
+
+    it('allows curl commands with various valid timeout flags', () => {
+      const validCommands = [
+        'curl -m 10 https://api.example.com',
+        'curl -m5 https://api.example.com',
+        'curl -m 1.5 https://api.example.com',
+        'curl --max-time 15 https://api.example.com',
+        'curl --max-time=30 https://api.example.com',
+        'curl --max-time=0.5 https://api.example.com',
+        'curl --connect-timeout 5 https://api.example.com',
+        'curl.exe -sSf -m 10 https://api.example.com',
+        'CURL --max-time 10 https://api.example.com',
+      ];
+
+      for (const cmd of validCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('allow');
+      }
+    });
+
+    it('does not falsely block commands where curl is an argument or string', () => {
+      const result1 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'git commit -m "fix: update curl timeout handling"' },
+        },
+      });
+      expect(result1.decision).toBe('allow');
+
+      const result2 = handleSafetyGuard({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'echo "curl without timeout"' },
+        },
+      });
+      expect(result2.decision).toBe('allow');
+    });
+
     it('executes directly via node CLI with stdin/stdout JSON protocol', () => {
       const handlerPath = path.resolve(__dirname, '../hooks/safetyGuard.js');
       const inputPayload = JSON.stringify({
@@ -645,6 +736,319 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
         );
         expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if issue.md contains unfilled template placeholders', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+
+      const testPlaceholders = [
+        '[ここに対象の課題を記載]',
+        '<前提条件や初期状態>',
+        '<実行される操作や入力データ>',
+        '<境界値・異常系・拒絶シナリオ名称>',
+        'YYYY-MM-DD',
+        'ISSUE-XXX',
+      ];
+
+      for (const placeholder of testPlaceholders) {
+        const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'placeholder-issue-'));
+        const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+        fs.mkdirSync(issueDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(issueDir, 'issue.md'),
+          `# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\n${placeholder}\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n`
+        );
+        fs.writeFileSync(
+          path.join(issueDir, 'pre_verification.md'),
+          '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+        );
+
+        try {
+          const result = handleBranchDoRGate(
+            {
+              toolCall: {
+                name: 'run_command',
+                args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+              },
+            },
+            { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+          );
+          expect(result.decision).toBe('deny');
+          expect(result.reason).toContain('Unfilled template placeholder detected');
+          expect(result.reason).toContain('docs/issues/ISSUE-099_test/issue.md');
+        } finally {
+          fs.rmSync(tempProject, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('denies branch creation if pre_verification.md contains unfilled template placeholders', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'placeholder-preverif-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n[ここに対象の機能や影響範囲を記載]'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Unfilled template placeholder detected');
+        expect(result.reason).toContain('docs/issues/ISSUE-099_test/pre_verification.md');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('does not falsely trigger placeholder denial on legitimate markdown links with brackets', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'placeholder-links-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\n[詳細はこちら](docs/readme.md) を参照して設計を完了した。\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if GitHub Issue is closed', () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'CLOSED', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-closed-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('closed');
+        expect(result.reason).toContain('Issue #99');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if GitHub Issue lacks status: ready or status: in-progress (empty labels, backlog, blocked, etc.)', () => {
+      const unreadyLabelSets = [
+        [],
+        [{ name: 'status: backlog' }],
+        [{ name: 'status: todo' }],
+        [{ name: 'status: blocked' }],
+        [{ name: 'bug' }, { name: 'backend' }],
+      ];
+
+      for (const labels of unreadyLabelSets) {
+        const mockExec = vi.fn().mockImplementation((cmd: string) => {
+          if (cmd.includes('gh issue view')) {
+            return JSON.stringify({ state: 'OPEN', labels });
+          }
+          return '';
+        });
+
+        const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-unready-'));
+        const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+        fs.mkdirSync(issueDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(issueDir, 'issue.md'),
+          '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+        );
+        fs.writeFileSync(
+          path.join(issueDir, 'pre_verification.md'),
+          '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+        );
+
+        try {
+          const result = handleBranchDoRGate(
+            {
+              toolCall: {
+                name: 'run_command',
+                args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+              },
+            },
+            { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+          );
+          expect(result.decision).toBe('deny');
+          expect(result.reason).toContain('does not satisfy Definition of Ready');
+          expect(result.reason).toContain('status: ready');
+        } finally {
+          fs.rmSync(tempProject, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('allows branch creation if GitHub Issue is open with status: ready or status: in-progress label', () => {
+      const readyLabelSets = [
+        [{ name: 'status: ready' }],
+        [{ name: 'status: in-progress' }],
+        [{ name: 'status: ready' }, { name: 'feature' }],
+      ];
+
+      for (const labels of readyLabelSets) {
+        const mockExec = vi.fn().mockImplementation((cmd: string) => {
+          if (cmd.includes('gh issue view')) {
+            return JSON.stringify({ state: 'OPEN', labels });
+          }
+          return '';
+        });
+
+        const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-ready-'));
+        const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+        fs.mkdirSync(issueDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(issueDir, 'issue.md'),
+          '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+        );
+        fs.writeFileSync(
+          path.join(issueDir, 'pre_verification.md'),
+          '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+        );
+
+        try {
+          const result = handleBranchDoRGate(
+            {
+              toolCall: {
+                name: 'run_command',
+                args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+              },
+            },
+            { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+          );
+          expect(result.decision).toBe('allow');
+        } finally {
+          fs.rmSync(tempProject, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('bypasses GitHub Issue check gracefully if gh command is not installed or not recognized', () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          const err: any = new Error('/bin/sh: line 1: gh: command not found');
+          err.stderr = '/bin/sh: line 1: gh: command not found';
+          throw err;
+        }
+        return '';
+      });
+
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-nofound-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if GitHub Issue does not exist on GitHub', () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          const err: any = new Error('Could not resolve to an Issue with the number or title of 99.');
+          err.stderr = 'graphql error: Could not resolve to an Issue with the number or title of 99.';
+          throw err;
+        }
+        return '';
+      });
+
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-missing-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('does not exist on GitHub');
       } finally {
         fs.rmSync(tempProject, { recursive: true, force: true });
       }

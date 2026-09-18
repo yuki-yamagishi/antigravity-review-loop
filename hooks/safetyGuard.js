@@ -4,6 +4,7 @@
  * Enforces execution safety:
  * 1. Prohibits direct gh pr merge by the agent (merging is exclusively performed by human).
  * 2. Prohibits interactive watch tests.
+ * 3. Prohibits network commands (curl) without explicit timeout to prevent process hangs.
  */
 
 import path from 'path';
@@ -38,6 +39,23 @@ function verifyNonInteractiveTestExecution(commandLine) {
   return { decision: 'allow' };
 }
 
+/**
+ * Validates that network command 'curl' is executed with an explicit timeout.
+ */
+function verifyCurlTimeoutSpecified(commandLine) {
+  // Only match when curl or curl.exe is invoked as the command (not as an argument to git, echo, etc.)
+  if (/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+)?curl(?:\.exe)?\b/i.test(commandLine)) {
+    const hasTimeout = /(?:(?:^|\s)-m\s*\d+(?:\.\d+)?|(?:^|\s)(?:--max-time|--connect-timeout)(?:=|\s+)\d+(?:\.\d+)?)/i.test(commandLine);
+    if (!hasTimeout) {
+      return {
+        decision: 'deny',
+        reason: "[SafetyGuard Denied] Network command 'curl' executed without timeout. Specify a timeout using '--max-time <seconds>' or '-m <seconds>' (e.g. 'curl --max-time 10 ...') to prevent process hangs.",
+      };
+    }
+  }
+  return { decision: 'allow' };
+}
+
 export function handleSafetyGuard(payload = {}) {
   const toolCall = payload.toolCall || {};
   const toolName = toolCall.name || '';
@@ -54,6 +72,7 @@ export function handleSafetyGuard(payload = {}) {
   const checks = [
     () => verifyGhPrMergeProhibited(trimmed),
     () => verifyNonInteractiveTestExecution(trimmed),
+    () => verifyCurlTimeoutSpecified(trimmed),
   ];
 
   for (const check of checks) {
