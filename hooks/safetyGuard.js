@@ -4,7 +4,8 @@
  * Enforces execution safety:
  * 1. Prohibits direct gh pr merge by the agent (merging is exclusively performed by human).
  * 2. Prohibits interactive watch tests.
- * 3. Prohibits network commands (curl) without explicit timeout to prevent process hangs.
+ * 3. Prohibits network commands (curl, Invoke-WebRequest, Invoke-RestMethod, iwr, irm)
+ *    without explicit positive timeout to prevent process hangs.
  */
 
 import path from 'path';
@@ -56,6 +57,39 @@ function verifyCurlTimeoutSpecified(commandLine) {
   return { decision: 'allow' };
 }
 
+/**
+ * Validates that PowerShell network commands (Invoke-WebRequest, Invoke-RestMethod, iwr, irm)
+ * are executed with an explicit positive timeout (-TimeoutSec > 0).
+ */
+function verifyPowerShellWebTimeoutSpecified(commandLine) {
+  // Pattern 1: Direct invocation (including env prefix, sudo, and variable assignment like $res = ...)
+  const isDirectWebCmd = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+)?(?:\$[A-Za-z0-9_]+\s*=\s*)?(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i.test(commandLine);
+
+  // Pattern 2: Invocation via powershell/pwsh wrapper (e.g. powershell -Command "..." or pwsh -c "...")
+  const isWrapper = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+)?(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b/i.test(commandLine);
+  const wrapperHasWebCmd = isWrapper && /(?:^|[;"'\s]|\$[A-Za-z0-9_]+\s*=\s*)(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i.test(commandLine);
+
+  if (isDirectWebCmd || wrapperHasWebCmd) {
+    const timeoutMatch = commandLine.match(/(?:^|\s)-TimeoutSec(?::|=|\s+)(\d+(?:\.\d+)?)/i);
+    if (!timeoutMatch) {
+      return {
+        decision: 'deny',
+        reason: "[SafetyGuard Denied] Network command 'Invoke-WebRequest' / 'Invoke-RestMethod' (or alias 'iwr' / 'irm') executed without timeout. Specify a timeout using '-TimeoutSec <seconds>' (e.g. 'Invoke-WebRequest -TimeoutSec 10 ...') to prevent process hangs.",
+      };
+    }
+
+    const timeoutVal = parseFloat(timeoutMatch[1]);
+    if (isNaN(timeoutVal) || timeoutVal <= 0) {
+      return {
+        decision: 'deny',
+        reason: "[SafetyGuard Denied] Network command 'Invoke-WebRequest' / 'Invoke-RestMethod' (or alias 'iwr' / 'irm') executed with invalid timeout ('-TimeoutSec 0' indicates indefinite wait). Specify a positive timeout of at least 1 second using '-TimeoutSec <seconds>' to prevent process hangs.",
+      };
+    }
+  }
+
+  return { decision: 'allow' };
+}
+
 export function handleSafetyGuard(payload = {}) {
   const toolCall = payload.toolCall || {};
   const toolName = toolCall.name || '';
@@ -73,6 +107,7 @@ export function handleSafetyGuard(payload = {}) {
     () => verifyGhPrMergeProhibited(trimmed),
     () => verifyNonInteractiveTestExecution(trimmed),
     () => verifyCurlTimeoutSpecified(trimmed),
+    () => verifyPowerShellWebTimeoutSpecified(trimmed),
   ];
 
   for (const check of checks) {
