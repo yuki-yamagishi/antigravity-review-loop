@@ -427,6 +427,114 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       expect(result2.decision).toBe('allow');
     });
 
+    it('denies PowerShell HTTP commands executed without timeout', () => {
+      const commandsWithoutTimeout = [
+        'Invoke-WebRequest https://api.github.com',
+        'Invoke-WebRequest -Uri https://example.com',
+        'Invoke-RestMethod https://api.github.com',
+        'Invoke-RestMethod -Uri https://example.com/api',
+        'iwr https://example.com',
+        'irm https://example.com/api',
+        'powershell -Command "Invoke-WebRequest https://example.com"',
+        'powershell.exe -c "iwr https://example.com"',
+        'powershell -Command "Invoke-RestMethod https://api.example.com"',
+        'pwsh -c "irm https://api.example.com"',
+        '$res = Invoke-RestMethod https://api.example.com',
+        '$data = iwr https://example.com',
+        'powershell -Command "$res = Invoke-RestMethod https://api.example.com"',
+      ];
+
+      for (const cmd of commandsWithoutTimeout) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Invoke-WebRequest');
+        expect(result.reason).toContain('-TimeoutSec');
+      }
+    });
+
+    it('denies PowerShell HTTP commands with invalid timeout values (-TimeoutSec 0)', () => {
+      const commandsWithZeroTimeout = [
+        'Invoke-WebRequest -TimeoutSec 0 https://example.com',
+        'iwr -TimeoutSec:0 https://example.com',
+        'Invoke-RestMethod -TimeoutSec=0 https://api.example.com',
+        'irm -TimeoutSec 0 https://api.example.com',
+        'irm -TimeoutSec -10 https://api.example.com',
+        'powershell -Command "Invoke-WebRequest -TimeoutSec 0 https://example.com"',
+        'powershell.exe -Command "& { iwr https://example.com }"',
+        '$res = Invoke-RestMethod -TimeoutSec 0 https://api.example.com',
+      ];
+
+      for (const cmd of commandsWithZeroTimeout) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Invoke-WebRequest');
+        expect(result.reason).toContain('-TimeoutSec');
+      }
+    });
+
+    it('allows PowerShell HTTP commands with valid timeout flags (-TimeoutSec <positive_integer>)', () => {
+      const validCommands = [
+        'Invoke-WebRequest -TimeoutSec 10 https://api.example.com',
+        'Invoke-WebRequest -TimeoutSec:15 https://api.example.com',
+        'Invoke-WebRequest -TimeoutSec=20 https://api.example.com',
+        'iwr -TimeoutSec 5 https://api.example.com',
+        'iwr -TimeoutSec:5 https://api.example.com',
+        'Invoke-RestMethod -TimeoutSec 30 https://api.example.com',
+        'Invoke-RestMethod -TimeoutSec:30 https://api.example.com',
+        'irm -TimeoutSec 10 https://api.example.com',
+        'irm -TimeoutSec=10 https://api.example.com',
+        'powershell -Command "Invoke-WebRequest -TimeoutSec 10 https://example.com"',
+        'powershell.exe -c "iwr -TimeoutSec 5 https://example.com"',
+        'powershell.exe -Command "& { iwr -TimeoutSec 5 https://example.com }"',
+        'pwsh -c "Invoke-RestMethod -TimeoutSec 20 https://api.example.com"',
+        'pwsh -c "irm -TimeoutSec 5 https://api.example.com"',
+        '$res = Invoke-RestMethod -TimeoutSec 15 https://api.example.com',
+        '$data = iwr -TimeoutSec 5 https://example.com',
+        'powershell -Command "$res = Invoke-RestMethod -TimeoutSec 15 https://api.example.com"',
+      ];
+
+      for (const cmd of validCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('allow');
+      }
+    });
+
+    it('does not falsely block commands where iwr, irm, or Invoke-WebRequest is part of string or unrelated words', () => {
+      const unrelatedCommands = [
+        'git commit -m "fix: update iwr handling in safetyGuard"',
+        'git commit -m "add support for Invoke-RestMethod and irm"',
+        'git add src/iwr_handler.ts',
+        'echo "firmware version 1.0"',
+        'cat c:\\firmware\\config.txt',
+        'npm run test:fast',
+      ];
+
+      for (const cmd of unrelatedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('allow');
+      }
+    });
+
     it('executes directly via node CLI with stdin/stdout JSON protocol', () => {
       const handlerPath = path.resolve(__dirname, '../hooks/safetyGuard.js');
       const inputPayload = JSON.stringify({
@@ -442,6 +550,21 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       const parsed = JSON.parse(stdout.trim());
       expect(parsed.decision).toBe('deny');
       expect(parsed.reason).toContain('gh pr merge');
+
+      // Test PowerShell web request via node CLI execution
+      const webPayload = JSON.stringify({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'iwr https://api.github.com' },
+        },
+      });
+      const webStdout = execSync(`node "${handlerPath}"`, {
+        input: webPayload,
+        encoding: 'utf8',
+      });
+      const webParsed = JSON.parse(webStdout.trim());
+      expect(webParsed.decision).toBe('deny');
+      expect(webParsed.reason).toContain('Invoke-WebRequest');
     });
   });
 

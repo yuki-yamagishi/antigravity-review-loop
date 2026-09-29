@@ -13,7 +13,7 @@ Antigravity 公式プラグイン仕様（`plugins/<plugin-name>/plugin.json`）
 
 1. **物理ライフサイクルフック (`hooks.json`)**:
    - `branchDoRGate.js`: ブランチ作成前の Definition of Ready（DoR: GitHub Issue状態/ラベル、Why・排除リスク・Given-When-Then受入シナリオ・テンプレート未記入検知）および作業ツリーのクリーン性を物理強制。
-   - `safetyGuard.js`: 自律エージェントによる `gh pr merge` の直接実行（人間による最終マージ専権の侵害）、対話型テストによるハング、およびタイムアウト未指定のネットワークコマンド（`curl`）を物理遮断。
+   - `safetyGuard.js`: 自律エージェントによる `gh pr merge` の直接実行（人間による最終マージ専権の侵害）、対話型テストによるハング、およびタイムアウト未指定のネットワークコマンド（`curl`、PowerShell の `Invoke-WebRequest` / `Invoke-RestMethod` / `iwr` / `irm`）を物理遮断。
    - `prePrAuditGate.js`: PR作成前の4軸ドキュメント（issue, pre_verification, plan, walkthrough）およびPre-PR DoDの未完了チェックを物理検証。
    - `stopHook.js`: PR作成後、レビューループが解決（`RESOLVED_LGTM`）に達する前の早期セッション停止を物理ブロック。
    - `postPrCreate.js`: PR作成成功時にループ状態マシンを自動で `PR_CREATED` に遷移。
