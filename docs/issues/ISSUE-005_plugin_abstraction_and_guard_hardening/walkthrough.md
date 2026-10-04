@@ -23,16 +23,24 @@
    - `hooks/prePrAuditGate.js`: `config.requiredAxisDocs`、`config.adrDir`、`config.ssotFile` を受け取り、設定されたドキュメント群および SSOT/ADR パスを動的に検証。
 6. **Issue ディレクトリ探索の共通化 & プロジェクトルート復元 (Nits & Should 5/8)**:
    - `hooks/hookUtils.js`: `findIssueDir` および `findPluginRoot` を新設・集約。`findProjectRoot` は `.git` かつ `package.json` が存在するディレクトリ（AND 条件）に厳密化。
-7. **改行コードの正規化 (Process 8)**:
+7. **プラグインパス動的解決 & ガイダンス汎用化**:
+   - `state/loopState.js`: `resolveScriptCliPath` ヘルパーを新設し、ホストプロジェクトのプラグイン配置に応じた相対パス（`.agents/plugins/antigravity-review-loop/...` 等）を動的に解決。
+   - `skills/review-self-healing/SKILL.md`: ドキュメント内の実行パスを汎用化（`<プラグインパス>`）し、配置場所に応じた注記を追加。
+8. **正規表現エスケープの厳格化 & 見出し・プレースホルダー定数テーブル化**:
+   - `hooks/branchDoRGate.js`: `escapePathForRegex` を実装し、特殊文字（`.` や `+`）を含む `issuesDir` に対しても安全に動作するよう保護。セクション見出しやプレースホルダーの正規表現を定数テーブルとしてエクスポート。
+9. **フック共通ユーティリティの単体テスト新設**:
+   - `tests/hookUtils.test.ts`: `findProjectRoot`（モノレポ誤認防止、`.git` + `package.json` AND 条件、`.agents` スキップ）、`findPluginRoot`、`findIssueDir` の包括的単体テスト（6件、100% PASS）。
+10. **改行コードの正規化 (Process 8)**:
    - `.gitattributes`: クロスプラットフォーム開発における改行コード正規化（LF）ルールを定義し、`git add --renormalize .` を実行。
-8. **言語中立化・クリーンアップ (Nits & Should 4)**:
+11. **言語中立化・クリーンアップ**:
    - `agents/fleet_reviewer.md`: TypeScript 固定から言語中立な型安全性観点へ抽象化。
    - `state/loopState.js`: 未実在の古い ADR 参照コメントを整理。
 
 ## 3. 検証結果
 
-- `npm.cmd test`: 全 7 テストファイル、**143 件のテストが 100% PASS**。
+- `npm.cmd test`: 全 8 テストファイル、**152 件のテストが 100% PASS**。
 - `JobEval` の残存検索: 0件（完全排除確認）。
 - テンプレートそのままコピー時のブランチ作成拒絶: 正常にブロックされることを確認。
 - 設定ファイル改ざん防止: ツール呼び出し・シェルコマンドともに正常に拒絶されることを確認。
-- 非対話テストコマンド判定: `--` の有無による判定精緻化を確認。
+- 非対話テストコマンド判定: 引数付き（`npm test -- tests/hooks.test.ts --run` 等）や `--` の有無による判定精緻化を確認。
+- 特殊パス・モノレポ・モック環境での決定論的動作確認。
