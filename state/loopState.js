@@ -10,6 +10,8 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
+import { findPluginRoot, findProjectRoot } from '../hooks/hookUtils.js';
+
 export const STATUS = Object.freeze({
   IDLE: 'IDLE',
   PR_CREATED: 'PR_CREATED',
@@ -21,6 +23,26 @@ export const STATUS = Object.freeze({
 const DIR_NAME = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_STATE_FILE = process.env.LOOP_STATE_FILE || 
   path.resolve(DIR_NAME, 'loop_state.json');
+
+/**
+ * Resolves a script path relative to the host project root if possible,
+ * falling back to the plugin relative path.
+ */
+export function resolveScriptCliPath(relativePathFromPlugin) {
+  try {
+    const pluginRoot = findPluginRoot(DIR_NAME);
+    const projectRoot = findProjectRoot(DIR_NAME);
+    if (pluginRoot && projectRoot) {
+      const rel = path.relative(projectRoot, path.resolve(pluginRoot, relativePathFromPlugin)).replace(/\\/g, '/');
+      if (!rel.startsWith('..')) {
+        return rel;
+      }
+    }
+    return relativePathFromPlugin;
+  } catch {
+    return relativePathFromPlugin;
+  }
+}
 
 /**
  * Creates a blank initial state object.
@@ -323,8 +345,9 @@ export class LoopStateMachine {
 
       const prState = checkPrStateFn(current.prNumber);
       if (prState !== 'MERGED' && prState !== 'UNKNOWN') {
+        const loopStateScript = resolveScriptCliPath('state/loopState.js');
         throw new Error(
-          `[Reset Gate Denied] Cannot reset loopState: PR #${current.prNumber} is in state "${prState}". Loop state can only be safely reset after the PR has been merged to main by the user. (Emergency override: run 'node .agents/plugins/antigravity-review-loop/state/loopState.js reset --force')`
+          `[Reset Gate Denied] Cannot reset loopState: PR #${current.prNumber} is in state "${prState}". Loop state can only be safely reset after the PR has been merged to main by the user. (Emergency override: run 'node ${loopStateScript} reset --force')`
         );
       }
     }
@@ -377,28 +400,32 @@ export class LoopStateMachine {
         (i) => ['must', 'should'].includes(i.type) && !i.resolved
       ).length;
 
+      const loopStateScript = resolveScriptCliPath('state/loopState.js');
+      const parseReviewScript = resolveScriptCliPath('skills/review-self-healing/scripts/parseReviewResult.js');
+      const resolveReviewScript = resolveScriptCliPath('skills/review-self-healing/scripts/resolveReview.js');
+
       let guidance = '';
       switch (current.status) {
         case STATUS.PR_CREATED:
-          guidance = `Wait for GitHub Actions CI to pass on PR #${current.prNumber}, then run 'node .agents/plugins/antigravity-review-loop/state/loopState.js review-requested' and launch fleet reviewers ('fleet_reviewer' and 'fleet_completion_auditor').`;
+          guidance = `Wait for GitHub Actions CI to pass on PR #${current.prNumber}, then run 'node ${loopStateScript} review-requested' and launch fleet reviewers ('fleet_reviewer' and 'fleet_completion_auditor').`;
           break;
         case STATUS.REVIEW_REQUESTED: {
           const pending = [];
           if (!current.reviews?.codeReviewer) pending.push('fleet_reviewer');
           if (!current.reviews?.completionAuditor) pending.push('fleet_completion_auditor');
           const pendingStr = pending.length > 0 ? pending.join(' and ') : 'fleet reviewers';
-          guidance = `Multi-agent review consortium is in progress. Await review from [${pendingStr}]. Parse results with 'node .agents/plugins/antigravity-review-loop/skills/review-self-healing/scripts/parseReviewResult.js <file> --agent-type <codeReviewer|completionAuditor> --update-state'.`;
+          guidance = `Multi-agent review consortium is in progress. Await review from [${pendingStr}]. Parse results with 'node ${parseReviewScript} <file> --agent-type <codeReviewer|completionAuditor> --update-state'.`;
           break;
         }
         case STATUS.NEEDS_FIX:
-          guidance = `Fix the ${unresolvedCount} unresolved blocking issue(s) from review consortium, commit changes, push to remote, and run 'node .agents/plugins/antigravity-review-loop/skills/review-self-healing/scripts/resolveReview.js' to report fixes and request re-review.`;
+          guidance = `Fix the ${unresolvedCount} unresolved blocking issue(s) from review consortium, commit changes, push to remote, and run 'node ${resolveReviewScript}' to report fixes and request re-review.`;
           break;
         default:
           guidance = `Complete the self-healing review cycle and reach RESOLVED_LGTM.`;
           break;
       }
 
-      reason = `Stop rejected: Loop is currently in status "${current.status}" with ${unresolvedCount} unresolved blocking issue(s). (Remediation Guidance: ${guidance}) (Emergency abort: run 'node .agents/plugins/antigravity-review-loop/state/loopState.js reset --force')`;
+      reason = `Stop rejected: Loop is currently in status "${current.status}" with ${unresolvedCount} unresolved blocking issue(s). (Remediation Guidance: ${guidance}) (Emergency abort: run 'node ${loopStateScript} reset --force')`;
     }
 
     return {

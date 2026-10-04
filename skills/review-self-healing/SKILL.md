@@ -36,9 +36,11 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
 
 ## 2. Antigravity 2者 Fleet 並行レビュー (Review Consortium)
 
+> 💡 **実行パスについて**: コマンド例中の `<プラグインパス>` は、ホストプロジェクトにおける本プラグインの配置場所（例: `.agents/plugins/antigravity-review-loop` またはプラグイン開発時は `.`）に置き換えて実行してください。
+
 1. **レビュー待機状態への遷移**:
    ```bash
-   node .agents/plugins/antigravity-review-loop/state/loopState.js review-requested --active-subagents
+   node <プラグインパス>/state/loopState.js review-requested --active-subagents
    ```
 2. **Fleet 2者の並行起動 (invoke_subagent)**:
    - Antigravity の `invoke_subagent` ツールを用い、以下の 2 体の専門サブエージェントを配列で**同時に並行起動**します：
@@ -55,8 +57,8 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
      ```
    - それぞれの結果をステートマシンに記録：
      ```bash
-     node .agents/plugins/antigravity-review-loop/skills/review-self-healing/scripts/parseReviewResult.js <コードレビューファイル> --agent-type codeReviewer --update-state
-     node .agents/plugins/antigravity-review-loop/skills/review-self-healing/scripts/parseReviewResult.js <完了性監査ファイル> --agent-type completionAuditor --update-state
+     node <プラグインパス>/skills/review-self-healing/scripts/parseReviewResult.js <コードレビューファイル> --agent-type codeReviewer --update-state
+     node <プラグインパス>/skills/review-self-healing/scripts/parseReviewResult.js <完了性監査ファイル> --agent-type completionAuditor --update-state
      ```
 
 ---
@@ -73,7 +75,7 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    - GitHub Actions CI がパスするまで待機（`gh pr checks`）。
 3. **公式修正報告の投稿 & 再レビュー待機遷移**:
    ```bash
-   node .agents/plugins/antigravity-review-loop/skills/review-self-healing/scripts/resolveReview.js --commit <コミットハッシュ> --summary "<修正概要>"
+   node <プラグインパス>/skills/review-self-healing/scripts/resolveReview.js --commit <コミットハッシュ> --summary "<修正概要>"
    ```
    - PR スレッドに公式修正報告が投稿され、状態は `STATUS.REVIEW_REQUESTED`（再レビュー待ち）に遷移します。
    - **【最重要】コード修正が入ったため過去の全レビュー判定は Stale（無効化）され、`reviews` スロットは両者ともリセットされます。親エージェントによる自己承認（セルフLGTM）および片方の承認のみでの通過は物理的に禁止されています。**
@@ -91,5 +93,5 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
 2. **状態リセット**:
    マージ完了後、ループ状態をリセットします：
    ```bash
-   node .agents/plugins/antigravity-review-loop/state/loopState.js reset
+   node <プラグインパス>/state/loopState.js reset
    ```

@@ -19,6 +19,43 @@ import { defaultStateMachine, STATUS } from '../state/loopState.js';
 import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
+ * Escapes regex special characters in a path and normalizes separators for regex matching.
+ */
+export function escapePathForRegex(pathStr) {
+  const normalized = String(pathStr).replace(/\\/g, '/');
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return escaped.replace(/\/+/g, '[/\\\\]');
+}
+
+export const DEFAULT_SECTION_PATTERNS = Object.freeze({
+  why: /##\s+(?:\d+\.\s+)?(?:解決すべき課題・背景|解決する課題・背景)\s*(?:\([^)]*Why[^)]*\))?/i,
+  risk: /##\s+(?:\d+\.\s+)?(?:排除するリスク)\s*(?:\([^)]*Risks?[^)]*\))?/i,
+  criteria: /##\s+(?:\d+\.\s+)?(?:受け入れ基準|受入基準|(?:Acceptance Criteria|Definition of Done|DoD)\b)/i,
+  impact: /##\s+(?:\d+\.\s+)?(?:重複・パッチワーク点検|重複・影響調査|Impact\s*(?:&|and)\s*Duplication\s*Check)/i,
+});
+
+export const DEFAULT_EMPTY_FIELD_PATTERNS = Object.freeze([
+  /^[ \t]*-[ \t]+\*\*(?:現在の問題点|背景と真の動機|放置した場合の影響)\*\*[ \t]*:[ \t]*$/m,
+  /^[ \t]*-[ \t]+\*\*リスク\s*\d+\*\*[ \t]*:[ \t]*$/m,
+  /^[ \t]*-[ \t]+\*\*(?:Given|When|Then)\*\*[ \t]*:[ \t]*$/m,
+  /^[ \t]*-[ \t]+\*\*(?:対象コンポーネント|既存の挙動|変更対象ファイル|影響を受けるコンポーネント|既存の類似機能・共通基盤の有無|過去の ADR \/ 設計決定との整合性|根本的解決（リファクタリング含む）の妥当性判断|検証項目|実行コマンド \/ 手順|検証結果)\*\*[ \t]*:[ \t]*$/m,
+]);
+
+export const DEFAULT_PLACEHOLDER_PATTERNS = Object.freeze([
+  /\[ここに対象/i,
+  /\[ここに[^\]\r\n]*(?:記載|記述)\]/i,
+  /\[記入(?:してください)?\]/i,
+  /<!--\s*TODO/i,
+  /\bTODO:\s*(?:TBD|未定|後で書く)/i,
+  /\[(?:TODO|TBD|未定)[^\]\r\n]*\]/i,
+  /\{\{(?:TODO|TBD|未定|ISSUE|TITLE)[^}\r\n]*\}\}/i,
+  /<(?:番号|簡潔な目的|シナリオ|前提|初期状態|操作|入力|期待|不正入力|境界値|異常値|エラー|要記述|TBD|ISSUE_NUMBER|ISSUE_TITLE|TODO|REPLACE_ME)[^>]*>/i,
+  /<(?:前提条件|初期状態|実行される操作|入力データ|期待される結果|境界値・異常系・拒絶シナリオ名称)[^>]*>/i,
+  /\bYYYY-MM-DD\b/,
+  /\b(?:ADR-XXXX|ISSUE-XXX)\b/,
+]);
+
+/**
  * Step 1: Validates working tree cleanliness.
  * Prohibits creating branches with uncommitted dirty changes (except untracked docs/issues/).
  */
@@ -28,7 +65,7 @@ function verifyWorkingTreeCleanliness(exec, projectRoot, issuesDirName = 'docs/i
     if (statusOut.length > 0) {
       const lines = statusOut.split('\n').map((l) => l.trim()).filter(Boolean);
       // Allow untracked docs/issues/ files created for the new issue, but block any modified, deleted, staged, or other untracked files
-      const escapedDir = issuesDirName.replace(/[/\\?*]/g, '[/\\\\]');
+      const escapedDir = escapePathForRegex(issuesDirName);
       const issuesRegex = new RegExp(`^\\?\\?\\s+"?${escapedDir}[/\\\\]`, 'i');
       const dirtyLines = lines.filter((l) => !issuesRegex.test(l));
       if (dirtyLines.length > 0) {
@@ -63,22 +100,7 @@ function verifyLoopStateIdle(stateMachine) {
  * Step 3: Validates that template placeholders and empty mandatory fields are not left unfilled.
  */
 export function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir, issuesRelDir = 'docs/issues') {
-  const placeholderPatterns = [
-    /\[ここに対象/i,
-    /\[ここに[^\]\r\n]*(?:記載|記述)\]/i,
-    /\[記入(?:してください)?\]/i,
-    /<!--\s*TODO/i,
-    /\bTODO:\s*(?:TBD|未定|後で書く)/i,
-    /\[(?:TODO|TBD|未定)[^\]\r\n]*\]/i,
-    /\{\{(?:TODO|TBD|未定|ISSUE|TITLE)[^}\r\n]*\}\}/i,
-    /<(?:番号|簡潔な目的|シナリオ|前提|初期状態|操作|入力|期待|不正入力|境界値|異常値|エラー|要記述|TBD|ISSUE_NUMBER|ISSUE_TITLE|TODO|REPLACE_ME)[^>]*>/i,
-    /<[ぁ-んァ-ヶー一-龠]+>/,
-    /<(?:ここに|調査|現在|変更|波及|関連|場当たり|検証)[^>]*>/,
-    /\bYYYY-MM-DD\b/,
-    /\b(?:ADR-XXXX|ISSUE-XXX)\b/,
-  ];
-
-  for (const pattern of placeholderPatterns) {
+  for (const pattern of DEFAULT_PLACEHOLDER_PATTERNS) {
     if (pattern.test(content)) {
       return {
         decision: 'deny',
@@ -88,14 +110,7 @@ export function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir, 
   }
 
   // Detect empty mandatory field lines (e.g. "- **現在の問題点**: \n" or "- **Given**: \n")
-  const emptyFieldPatterns = [
-    /^[ \t]*-[ \t]+\*\*(?:現在の問題点|背景と真の動機|放置した場合の影響)\*\*[ \t]*:[ \t]*$/m,
-    /^[ \t]*-[ \t]+\*\*リスク\s*\d+\*\*[ \t]*:[ \t]*$/m,
-    /^[ \t]*-[ \t]+\*\*(?:Given|When|Then)\*\*[ \t]*:[ \t]*$/m,
-    /^[ \t]*-[ \t]+\*\*(?:対象コンポーネント|既存の挙動|変更対象ファイル|影響を受けるコンポーネント|既存の類似機能・共通基盤の有無|過去の ADR \/ 設計決定との整合性|根本的解決（リファクタリング含む）の妥当性判断|検証項目|実行コマンド \/ 手順|検証結果)\*\*[ \t]*:[ \t]*$/m,
-  ];
-
-  for (const pattern of emptyFieldPatterns) {
+  for (const pattern of DEFAULT_EMPTY_FIELD_PATTERNS) {
     if (pattern.test(content)) {
       return {
         decision: 'deny',
@@ -174,9 +189,9 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir, templateGuidePath =
   }
 
   const issueContent = fs.readFileSync(issueMdPath, 'utf8');
-  const hasWhySection = /##\s+(?:\d+\.\s+)?(?:解決すべき課題・背景|解決する課題・背景)\s*(?:\([^)]*Why[^)]*\))?/i.test(issueContent);
-  const hasRiskSection = /##\s+(?:\d+\.\s+)?(?:排除するリスク)\s*(?:\([^)]*Risks?[^)]*\))?/i.test(issueContent);
-  const hasCriteriaSection = /##\s+(?:\d+\.\s+)?(?:受け入れ基準|受入基準|(?:Acceptance Criteria|Definition of Done|DoD)\b)/i.test(issueContent);
+  const hasWhySection = DEFAULT_SECTION_PATTERNS.why.test(issueContent);
+  const hasRiskSection = DEFAULT_SECTION_PATTERNS.risk.test(issueContent);
+  const hasCriteriaSection = DEFAULT_SECTION_PATTERNS.criteria.test(issueContent);
 
   if (!hasWhySection || !hasRiskSection || !hasCriteriaSection) {
     const missing = [];
@@ -239,7 +254,7 @@ function verifyImpactDuplicationCheck(issuesDir, targetIssueDir, templateGuidePa
   }
 
   const preVerifContent = fs.readFileSync(preVerifPath, 'utf8');
-  const hasImpactSection = /##\s+(?:\d+\.\s+)?(?:重複・パッチワーク点検|重複・影響調査|Impact\s*(?:&|and)\s*Duplication\s*Check)/i.test(preVerifContent);
+  const hasImpactSection = DEFAULT_SECTION_PATTERNS.impact.test(preVerifContent);
   if (!hasImpactSection) {
     return {
       decision: 'deny',

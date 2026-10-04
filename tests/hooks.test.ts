@@ -6,7 +6,13 @@ import { execSync } from 'child_process';
 import { LoopStateMachine, STATUS } from '../state/loopState.js';
 import { handleStop } from '../hooks/stopHook.js';
 import { handleSafetyGuard } from '../hooks/safetyGuard.js';
-import { handleBranchDoRGate } from '../hooks/branchDoRGate.js';
+import {
+  handleBranchDoRGate,
+  escapePathForRegex,
+  DEFAULT_SECTION_PATTERNS,
+  DEFAULT_EMPTY_FIELD_PATTERNS,
+  DEFAULT_PLACEHOLDER_PATTERNS,
+} from '../hooks/branchDoRGate.js';
 import { handlePrePrAuditGate } from '../hooks/prePrAuditGate.js';
 import { handlePostPrCreate } from '../hooks/postPrCreate.js';
 
@@ -181,13 +187,15 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
   });
 
   describe('safetyGuard (antigravity-review-loop/hooks/safetyGuard.js)', () => {
+    const cleanOptions = { config: { allowedTestCommands: [] } };
+
     it('allows non-command tools', () => {
       const result = handleSafetyGuard({
         toolCall: {
           name: 'view_file',
           args: { AbsolutePath: 'test.txt' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('allow');
     });
 
@@ -197,7 +205,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'git status' },
         },
-      });
+      }, cleanOptions);
       expect(result1.decision).toBe('allow');
 
       const result2 = handleSafetyGuard({
@@ -205,7 +213,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm run check:fast' },
         },
-      });
+      }, cleanOptions);
       expect(result2.decision).toBe('allow');
     });
 
@@ -215,7 +223,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'gh pr merge 46 --squash' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('deny');
       expect(result.reason).toContain('gh pr merge');
       expect(result.reason).toContain('prohibited');
@@ -227,7 +235,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'gh pr merge 123 --merge' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('deny');
       expect(result.reason).toContain('gh pr merge');
     });
@@ -238,7 +246,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm test' },
         },
-      });
+      }, cleanOptions);
       expect(result1.decision).toBe('deny');
       expect(result1.reason).toContain('Interactive test runner detected');
 
@@ -247,7 +255,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm run test' },
         },
-      });
+      }, cleanOptions);
       expect(result2.decision).toBe('deny');
       expect(result2.reason).toContain('Interactive test runner detected');
 
@@ -256,7 +264,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm.cmd test' },
         },
-      });
+      }, cleanOptions);
       expect(result3.decision).toBe('deny');
       expect(result3.reason).toContain('Interactive test runner detected');
 
@@ -265,7 +273,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm.cmd run test' },
         },
-      });
+      }, cleanOptions);
       expect(result4.decision).toBe('deny');
       expect(result4.reason).toContain('Interactive test runner detected');
     });
@@ -281,6 +289,9 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
         'npm.cmd run test:related',
         'npm test -- --run',
         'npm.cmd test -- --run',
+        'npm test -- tests/hooks.test.ts --run',
+        'npm.cmd test -- tests/hooks.test.ts --run',
+        'npm test -- tests/hooks.test.ts --watch=false',
         'npm test -- --watch=false',
         'npm.cmd test -- --watch=false',
         'npm test -- --no-watch',
@@ -295,7 +306,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
             name: 'run_command',
             args: { CommandLine: cmd },
           },
-        });
+        }, cleanOptions);
         expect(result.decision).toBe('allow');
       }
     });
@@ -316,7 +327,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
             name: 'run_command',
             args: { CommandLine: cmd },
           },
-        });
+        }, cleanOptions);
         expect(result.decision).toBe('deny');
         expect(result.reason).toContain('Interactive test runner detected');
       }
@@ -671,6 +682,72 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       } finally {
         fs.rmSync(tempProject, { recursive: true, force: true });
       }
+    });
+
+    it('handles issuesDir with regex special characters (. and +) safely in working tree cleanliness check', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-special-path-'));
+      const customIssuesDir = 'spec.v2/issues+dir';
+      const issueDir = path.join(tempProject, customIssuesDir, 'ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nWhy details\n\n## 3. 排除するリスク\nRisk details\n\n## 5. 受け入れ基準\n- [ ] 機能受け入れ基準および単体テストが正常に動作すること\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\nNo duplication found.\n'
+      );
+
+      try {
+        // Allowed when untracked path matches exact special character dir
+        const mockExecAllow = vi.fn().mockReturnValue(`?? ${customIssuesDir}/ISSUE-099_test/issue.md\n`);
+        const resultAllow = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExecAllow, stateMachine: testMachine, projectRoot: tempProject, config: { issuesDir: customIssuesDir } }
+        );
+        expect(resultAllow.decision).toBe('allow');
+
+        // Denied when path matches . as wildcard (e.g. specXv2 instead of spec.v2)
+        const mockExecDeny = vi.fn().mockReturnValue('?? specXv2/issues+dir/ISSUE-099_test/issue.md\n');
+        const resultDeny = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExecDeny, stateMachine: testMachine, projectRoot: tempProject, config: { issuesDir: customIssuesDir } }
+        );
+        expect(resultDeny.decision).toBe('deny');
+        expect(resultDeny.reason).toContain('Working tree is dirty');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('escapePathForRegex correctly escapes special chars and standardizes separators', () => {
+      expect(escapePathForRegex('docs/issues')).toBe('docs[/\\\\]issues');
+      expect(escapePathForRegex('docs\\issues')).toBe('docs[/\\\\]issues');
+      expect(escapePathForRegex('spec.v2/issues+dir')).toBe('spec\\.v2[/\\\\]issues\\+dir');
+      expect(escapePathForRegex('path(1)/[group]')).toBe('path\\(1\\)[/\\\\]\\[group\\]');
+    });
+
+    it('validates placeholder patterns against unedited templates and legitimate text', () => {
+      const matchAny = (str: string) => DEFAULT_PLACEHOLDER_PATTERNS.some((p) => p.test(str));
+      expect(matchAny('<ISSUE_NUMBER>')).toBe(true);
+      expect(matchAny('<要記述: ここに書く>')).toBe(true);
+      expect(matchAny('[ここに記載]')).toBe(true);
+      expect(matchAny('YYYY-MM-DD')).toBe(true);
+      expect(matchAny('ISSUE-XXX')).toBe(true);
+      expect(matchAny('<!-- TODO: later -->')).toBe(true);
+      // Valid prose should not trigger
+      expect(matchAny('正常な文章です。問題ありません。')).toBe(false);
+      expect(matchAny('HTMLの<div>タグ')).toBe(false);
     });
 
     it('denies branch creation if loopState is not IDLE', () => {
