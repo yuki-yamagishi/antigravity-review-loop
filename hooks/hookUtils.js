@@ -73,17 +73,21 @@ export function findPluginRoot(startDir) {
  */
 export function findProjectRoot(startDir) {
   let cur = path.resolve(startDir);
+  let fallbackPkgRoot = null;
   while (cur && path.dirname(cur) !== cur) {
     if (path.basename(cur) === '.agents' || cur.split(/[\\/]+/).includes('.agents')) {
       cur = path.dirname(cur);
       continue;
     }
-    if (fs.existsSync(path.join(cur, '.git')) && fs.existsSync(path.join(cur, 'package.json'))) {
+    if (fs.existsSync(path.join(cur, '.git'))) {
       return cur;
+    }
+    if (!fallbackPkgRoot && fs.existsSync(path.join(cur, 'package.json'))) {
+      fallbackPkgRoot = cur;
     }
     cur = path.dirname(cur);
   }
-  return path.resolve(startDir, '../../../..');
+  return fallbackPkgRoot || path.resolve(startDir, '../../../..');
 }
 
 /**

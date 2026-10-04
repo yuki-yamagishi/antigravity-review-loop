@@ -110,4 +110,25 @@ describe('Review Loop Config Layer (config/reviewLoopConfig.js)', () => {
     expect(config.readyLabels).toEqual(DEFAULT_CONFIG.readyLabels);
     expect(config.requiredAxisDocs).toEqual(DEFAULT_CONFIG.requiredAxisDocs);
   });
+
+  it('validates issueTracker and branchIssuePattern settings correctly', () => {
+    const rootConfig = path.join(tempDir, 'review-loop.config.json');
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      issueTracker: 'local',
+      branchIssuePattern: 'ticket-(\\d+)',
+      ssotFile: '',
+    }), 'utf8');
+
+    const config = loadConfig(tempDir);
+    expect(config.issueTracker).toBe('local');
+    expect(config.branchIssuePattern).toBe('ticket-(\\d+)');
+    expect(config.ssotFile).toBe('');
+
+    // Invalid issueTracker falls back to default
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      issueTracker: 'invalid-tracker',
+    }), 'utf8');
+    const fallbackConfig = loadConfig(tempDir);
+    expect(fallbackConfig.issueTracker).toBe('github');
+  });
 });

@@ -60,6 +60,17 @@ describe('Hook Utilities (hooks/hookUtils.js)', () => {
       const resolved = findProjectRoot(agentsHookDir);
       expect(resolved.toLowerCase()).toBe(tempDir.toLowerCase());
     });
+
+    it('identifies project root in non-Node projects (e.g. Python, Go, Rust) having .git without package.json', () => {
+      fs.mkdirSync(path.join(tempDir, '.git'), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'pyproject.toml'), '[tool.poetry]\nname = "python-project"', 'utf8');
+
+      const subDir = path.join(tempDir, 'src/mypackage/utils');
+      fs.mkdirSync(subDir, { recursive: true });
+
+      const resolved = findProjectRoot(subDir);
+      expect(resolved.toLowerCase()).toBe(tempDir.toLowerCase());
+    });
   });
 
   describe('findPluginRoot', () => {

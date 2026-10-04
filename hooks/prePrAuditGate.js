@@ -45,14 +45,14 @@ function verifyAcceptanceCriteriaCompleted(targetPath, targetIssueDir) {
   const issueMdContent = fs.readFileSync(path.resolve(targetPath, 'issue.md'), 'utf8');
 
   let prePrSection = issueMdContent;
-  // Match Pre-PR DoD section specifically across both new (5.2 Pre-PR Process DoD) and legacy (5.1 Pre-PR DoD) formats
-  const prePrMatch = issueMdContent.match(/###?\s*(?:5\.[12])?[^\n]*(?:PR作成前|Pre-PR\s*DoD)[^\n]*\n([\s\S]*?)(?=###?\s*(?:5\.[23])?[^\n]*(?:マージ前|Pre-Merge)|\n##\s|$)/i);
+  // Match Pre-PR DoD section specifically across both new and legacy formats, in Japanese or English
+  const prePrMatch = issueMdContent.match(/###?\s*(?:\d+\.\d+)?[^\n]*(?:PR作成前|Pre-PR\s*(?:DoD|Process|Criteria|Acceptance))[^\n]*\n([\s\S]*?)(?=###?\s*(?:\d+\.\d+)?[^\n]*(?:マージ前|Pre-Merge)|\n##\s|$)/i);
   if (prePrMatch) {
     prePrSection = prePrMatch[1];
   } else {
-    // Fallback: If no 5.1/5.2 split, exclude post-PR items like review, merge, CI from blocking
+    // Fallback: If no explicit split, exclude post-PR items like review, merge, CI from blocking
     const lines = issueMdContent.split(/\r?\n/).filter((line) =>
-      !/(?:合議レビュー|レビュー|LGTM|マージ|CI\b|GitHub Actions)/i.test(line)
+      !/(?:合議レビュー|レビュー|LGTM|マージ|CI\b|GitHub Actions|peer\s*review|consensus|re-review|merge\b)/i.test(line)
     );
     prePrSection = lines.join('\n');
   }
@@ -69,11 +69,14 @@ function verifyAcceptanceCriteriaCompleted(targetPath, targetIssueDir) {
 }
 
 /**
- * Step 3: Validates synchronization between SSOT (architecture_overview.md) and latest ADR.
+ * Step 3: Validates synchronization between SSOT and latest ADR.
  */
 function verifySsotAndAdrSynchronized(projectRoot, config = {}) {
   const adrDirRel = config.adrDir || 'docs/adr';
-  const ssotFileRel = config.ssotFile || 'docs/architecture_overview.md';
+  const ssotFileRel = config.ssotFile;
+  if (!ssotFileRel || typeof ssotFileRel !== 'string') {
+    return { decision: 'allow' };
+  }
   const adrDir = path.resolve(projectRoot, adrDirRel);
   const ssotPath = path.resolve(projectRoot, ssotFileRel);
   if (fs.existsSync(adrDir) && fs.existsSync(ssotPath)) {

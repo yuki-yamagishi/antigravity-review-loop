@@ -10,5 +10,7 @@
     "status: in-progress"
   ],
   "adrDir": "docs/adr",
-  "ssotFile": "docs/architecture_overview.md"
+  "ssotFile": "docs/architecture_overview.md",
+  "issueTracker": "auto",
+  "branchIssuePattern": "(?:issue[/-]|issue-|#|feat/|feature/|fix/)(\\d+)"
 }

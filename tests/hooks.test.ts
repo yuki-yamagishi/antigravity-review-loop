@@ -750,6 +750,138 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       expect(matchAny('HTMLの<div>タグ')).toBe(false);
     });
 
+    it('allows branch creation with English section headers in issue.md', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-english-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_english');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why (Background & Problem)\nClear why statement.\n\n## 3. Risks to Eliminate\nClear risk statement.\n\n## 5. Acceptance Criteria\n- [ ] Concrete verifiable unit and integration tests\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nNo duplicated logic found.\n'
+      );
+
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-english' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('supports flexible branch naming and custom branchIssuePattern', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-branch-pattern-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why\nWhy\n\n## 3. Risks to Eliminate\nRisk\n\n## 5. Acceptance Criteria\n- [ ] Pass all tests and requirements\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nClear\n'
+      );
+
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      try {
+        // 1. Matches default feat/99-test
+        const result1 = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feat/99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result1.decision).toBe('allow');
+
+        // 2. Matches custom pattern JIRA-(\d+)
+        const result2 = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feat/JIRA-99-core' },
+            },
+          },
+          {
+            execFn: mockExec,
+            stateMachine: testMachine,
+            projectRoot: tempProject,
+            config: { branchIssuePattern: 'JIRA-(\\d+)' },
+          }
+        );
+        expect(result2.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('supports issueTracker: "local" to bypass GitHub Issue checks', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-local-tracker-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_local');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why\nWhy\n\n## 3. Risks to Eliminate\nRisk\n\n## 5. Acceptance Criteria\n- [ ] Pass all tests and requirements\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nClear\n'
+      );
+
+      // mockExec throws an error that would normally deny on GitHub
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          throw new Error('HTTP 404: Could not resolve to an Issue');
+        }
+        return '';
+      });
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-local' },
+            },
+          },
+          {
+            execFn: mockExec,
+            stateMachine: testMachine,
+            projectRoot: tempProject,
+            config: { issueTracker: 'local' },
+          }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
     it('denies branch creation if loopState is not IDLE', () => {
       testMachine.setPrCreated(46);
       const mockExec = vi.fn().mockReturnValue('');

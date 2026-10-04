@@ -22,6 +22,8 @@ const DEFAULTS = {
   adrDir: 'docs/adr',
   ssotFile: 'docs/architecture_overview.md',
   requiredAxisDocs: ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'],
+  issueTracker: 'github',
+  branchIssuePattern: '',
 };
 
 function cloneDefaults() {
@@ -96,9 +98,14 @@ export function mergeConfig(parsed) {
     let valid = false;
     if (key === 'allowedTestCommands') valid = isStringArray(value, { allowEmpty: true });
     else if (key === 'readyLabels' || key === 'requiredAxisDocs') valid = isStringArray(value, { allowEmpty: false });
+    else if (key === 'issueTracker') valid = typeof value === 'string' && ['auto', 'github', 'local', 'none'].includes(value.toLowerCase().trim());
+    else if (key === 'branchIssuePattern') valid = typeof value === 'string';
+    else if (key === 'ssotFile' && (value === '' || value === null)) valid = true;
     else valid = isSafeRelativePath(value);
     if (valid) {
-      config[key] = Array.isArray(value) ? [...value] : value;
+      if (key === 'issueTracker') config[key] = value.toLowerCase().trim();
+      else if (key === 'ssotFile' && (value === '' || value === null)) config[key] = '';
+      else config[key] = Array.isArray(value) ? [...value] : value;
     } else {
       warn(`invalid value for "${key}"; using default.`);
     }

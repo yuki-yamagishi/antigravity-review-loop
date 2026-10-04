@@ -28,17 +28,17 @@ export function escapePathForRegex(pathStr) {
 }
 
 export const DEFAULT_SECTION_PATTERNS = Object.freeze({
-  why: /##\s+(?:\d+\.\s+)?(?:解決すべき課題・背景|解決する課題・背景)\s*(?:\([^)]*Why[^)]*\))?/i,
-  risk: /##\s+(?:\d+\.\s+)?(?:排除するリスク)\s*(?:\([^)]*Risks?[^)]*\))?/i,
+  why: /##\s+(?:\d+\.\s+)?(?:(?:解決すべき課題・背景|解決する課題・背景)(?:\s*\([^)]*Why[^)]*\))?|(?:Background\s*(?:&|and)\s*)?Why\b|Problem\s*(?:Statement)?\b|Background\b)/i,
+  risk: /##\s+(?:\d+\.\s+)?(?:排除するリスク(?:\s*\([^)]*Risks?[^)]*\))?|Risks?\s*(?:to\s*Eliminate)?\b)/i,
   criteria: /##\s+(?:\d+\.\s+)?(?:受け入れ基準|受入基準|(?:Acceptance Criteria|Definition of Done|DoD)\b)/i,
   impact: /##\s+(?:\d+\.\s+)?(?:重複・パッチワーク点検|重複・影響調査|Impact\s*(?:&|and)\s*Duplication\s*Check)/i,
 });
 
 export const DEFAULT_EMPTY_FIELD_PATTERNS = Object.freeze([
-  /^[ \t]*-[ \t]+\*\*(?:現在の問題点|背景と真の動機|放置した場合の影響)\*\*[ \t]*:[ \t]*$/m,
-  /^[ \t]*-[ \t]+\*\*リスク\s*\d+\*\*[ \t]*:[ \t]*$/m,
-  /^[ \t]*-[ \t]+\*\*(?:Given|When|Then)\*\*[ \t]*:[ \t]*$/m,
-  /^[ \t]*-[ \t]+\*\*(?:対象コンポーネント|既存の挙動|変更対象ファイル|影響を受けるコンポーネント|既存の類似機能・共通基盤の有無|過去の ADR \/ 設計決定との整合性|根本的解決（リファクタリング含む）の妥当性判断|検証項目|実行コマンド \/ 手順|検証結果)\*\*[ \t]*:[ \t]*$/m,
+  /^[ \t]*-[ \t]+\*\*(?:現在の問題点|背景と真の動機|放置した場合の影響|Current Problem|Root Cause|Impact if Unresolved)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:リスク\s*\d+|Risk\s*\d+)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:Given|When|Then)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:対象コンポーネント|既存の挙動|変更対象ファイル|影響を受けるコンポーネント|既存の類似機能・共通基盤の有無|過去の ADR \/ 設計決定との整合性|根本的解決（リファクタリング含む）の妥当性判断|検証項目|実行コマンド \/ 手順|検証結果|Target Components?|Existing Behavior|Modified Files|Impacted Components?|Verification Steps?|Verification Results?)\*\*[ \t]*:[ \t]*$/im,
 ]);
 
 export const DEFAULT_PLACEHOLDER_PATTERNS = Object.freeze([
@@ -125,7 +125,17 @@ export function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir, 
 /**
  * Step 4: Validates GitHub Issue existence, open state, and DoR label (status: ready).
  */
-function verifyGitHubIssueStatus(exec, issueNum, projectRoot, readyLabels = ['status: ready', 'status: in-progress']) {
+function verifyGitHubIssueStatus(
+  exec,
+  issueNum,
+  projectRoot,
+  readyLabels = ['status: ready', 'status: in-progress'],
+  issueTracker = 'auto',
+  hasLocalIssueDoc = false
+) {
+  if (issueTracker === 'local' || issueTracker === 'none') {
+    return { decision: 'allow' };
+  }
   try {
     const out = exec(`gh issue view ${issueNum} --json state,labels`, {
       cwd: projectRoot,
@@ -167,6 +177,9 @@ function verifyGitHubIssueStatus(exec, issueNum, projectRoot, readyLabels = ['st
       return { decision: 'allow' };
     }
     if (/Could not resolve to an Issue/i.test(errMsg) || /\bissue.*not found\b/i.test(errMsg) || /HTTP 404/i.test(errMsg)) {
+      if (issueTracker === 'auto' && hasLocalIssueDoc) {
+        return { decision: 'allow' };
+      }
       return {
         decision: 'deny',
         reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not exist on GitHub. Create the issue on GitHub before creating a branch.`,
@@ -323,17 +336,30 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
   }
 
   // Step 3, 4, 5, 6: Issue specification & DoR documentation check
-  const issueNumMatch = branchName.match(/issue-(\d+)/i);
+  let branchIssueRegex = /(?:issue[/-]|issue-|#|feat\/|feature\/|fix\/)(\d+)/i;
+  if (config.branchIssuePattern && typeof config.branchIssuePattern === 'string') {
+    try {
+      branchIssueRegex = new RegExp(config.branchIssuePattern, 'i');
+    } catch {}
+  }
+  const issueNumMatch = branchName.match(branchIssueRegex);
   if (issueNumMatch) {
     const issueNum = parseInt(issueNumMatch[1], 10);
+    const targetIssueDir = findIssueDir(issuesDir, issueNum);
 
     // Step 3: GitHub Issue existence, open state, and DoR label check
-    const ghIssueResult = verifyGitHubIssueStatus(exec, issueNum, projectRoot, config.readyLabels);
+    const ghIssueResult = verifyGitHubIssueStatus(
+      exec,
+      issueNum,
+      projectRoot,
+      config.readyLabels,
+      config.issueTracker,
+      Boolean(targetIssueDir)
+    );
     if (ghIssueResult.decision === 'deny') {
       return ghIssueResult;
     }
 
-    const targetIssueDir = findIssueDir(issuesDir, issueNum);
     if (!targetIssueDir) {
       return {
         decision: 'deny',
