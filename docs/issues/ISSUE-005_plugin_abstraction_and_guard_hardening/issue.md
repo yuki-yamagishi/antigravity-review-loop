@@ -84,13 +84,13 @@
 
 ### 5.2. PR作成前プロセス完了基準 (Pre-PR Process DoD)
 
-- [ ] 設定層ローダー（`config/reviewLoopConfig.js`）が実装され、単体テストが存在すること
-- [ ] `branchDoRGate.js` の未記入検知が強化され、テストが 100% PASS すること
-- [ ] `safetyGuard.js` の非対話テスト判定が精緻化され、テストが 100% PASS すること
-- [ ] `hooks/hookUtils.js` に Issue ディレクトリ解決が共通化されていること
-- [ ] `.gitattributes` が整備され、改行コードの警告が解消されていること
-- [ ] 全 4 軸ドキュメント（issue, pre_verification, plan, walkthrough）が完備していること
-- [ ] 第三者サブエージェント合議レビュー（`fleet_reviewer` & `fleet_completion_auditor`）を受領すること
+- [x] 設定層ローダー（`config/reviewLoopConfig.js`）が実装され、単体テストが存在すること
+- [x] `branchDoRGate.js` の未記入検知が強化され、テストが 100% PASS すること
+- [x] `safetyGuard.js` の非対話テスト判定が精緻化され、テストが 100% PASS すること
+- [x] `hooks/hookUtils.js` に Issue ディレクトリ解決が共通化されていること
+- [x] `.gitattributes` が整備され、改行コードの警告が解消されていること
+- [x] 全 4 軸ドキュメント（issue, pre_verification, plan, walkthrough）が完備していること
+- [x] 第三者サブエージェント合議レビュー（`fleet_reviewer` & `fleet_completion_auditor`）を受領すること
 
 ### 5.3. マージ前完了ゲート (Pre-Merge Gate)
 
