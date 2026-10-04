@@ -11,7 +11,8 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
+import { readStdinJson, writeStdoutJson, findProjectRoot, findIssueDir } from './hookUtils.js';
+import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
  * Step 1: Validates 4-axis documents completeness (issue.md, pre_verification.md, plan.md, walkthrough.md).
@@ -120,18 +121,14 @@ export function handlePrePrAuditGate(payload = {}, options = {}) {
     } catch {}
   }
 
+  const config = options.config || loadConfig(projectRoot);
+  const issuesDirRel = config.issuesDir || 'docs/issues';
+  const issuesDir = path.resolve(projectRoot, issuesDirRel);
+
   const issueNumMatch = currentBranch.match(/issue-(\d+)/i) || trimmed.match(/#(\d+)/);
   if (issueNumMatch) {
     const issueNum = parseInt(issueNumMatch[1], 10);
-    const issuesDir = path.resolve(projectRoot, 'docs/issues');
-
-    let targetIssueDir = null;
-    if (fs.existsSync(issuesDir)) {
-      const entries = fs.readdirSync(issuesDir);
-      const prefixPadded = `ISSUE-${String(issueNum).padStart(3, '0')}`;
-      const prefixRaw = `ISSUE-${issueNum}`;
-      targetIssueDir = entries.find((e) => e.startsWith(prefixPadded) || e.startsWith(prefixRaw));
-    }
+    const targetIssueDir = findIssueDir(issuesDir, issueNum);
 
     if (targetIssueDir) {
       const targetPath = path.resolve(issuesDir, targetIssueDir);

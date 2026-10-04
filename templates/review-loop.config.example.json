@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allowedTestCommands": [
+    "npm test -- --run",
+    "npm run test:run"
+  ],
+  "issuesDir": "docs/issues",
+  "readyLabels": [
+    "status: ready",
+    "status: in-progress"
+  ],
+  "adrDir": "docs/adr",
+  "ssotFile": "docs/architecture_overview.md"
+}

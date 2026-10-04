@@ -1,9 +1,8 @@
 /**
- * Loop State Machine (.agents/plugins/antigravity-review-loop/state/loopState.js)
+ * Loop State Machine (state/loopState.js)
  * 
- * ADR-0016 / ADR-0018 / ADR-0022
  * Manages the deterministic lifecycle state of the self-healing review loop.
- * State is persisted to .agents/plugins/antigravity-review-loop/state/loop_state.json.
+ * State is persisted to loop_state.json.
  */
 
 import fs from 'fs';

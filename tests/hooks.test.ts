@@ -334,6 +334,44 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
         },
       });
       expect(result8.decision).toBe('allow');
+
+      // Additional standard non-interactive test flags
+      const nonInteractiveFlags = [
+        'npm test --watch=false',
+        'npm.cmd test --watch=false',
+        'npm test --no-watch',
+        'npm.cmd test --no-watch',
+        'npm test --watchAll=false',
+        'npm run test --ci',
+        'npm test -- --run',
+        'npm.cmd test -- --run',
+        'npm test -- --watch=false',
+        'npm.cmd test -- --watch=false',
+      ];
+      for (const cmd of nonInteractiveFlags) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('allow');
+      }
+    });
+
+    it('allows npm test when explicitly configured in allowedTestCommands', () => {
+      const result = handleSafetyGuard(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'npm test' },
+          },
+        },
+        {
+          config: { allowedTestCommands: ['npm test'] },
+        }
+      );
+      expect(result.decision).toBe('allow');
     });
 
     it('denies curl commands executed without timeout', () => {
@@ -965,6 +1003,101 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
         );
         expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if template_issue.md is copied verbatim without being filled in', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'template-copy-issue-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      const templatePath = path.resolve(__dirname, '../templates/template_issue.md');
+      const rawTemplate = fs.readFileSync(templatePath, 'utf8');
+      fs.writeFileSync(path.join(issueDir, 'issue.md'), rawTemplate);
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Unfilled template placeholder detected');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if template_pre_verification.md is copied verbatim without being filled in', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'template-copy-preverif-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      const templatePath = path.resolve(__dirname, '../templates/template_pre_verification.md');
+      const rawTemplate = fs.readFileSync(templatePath, 'utf8');
+
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(path.join(issueDir, 'pre_verification.md'), rawTemplate);
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Unfilled template placeholder detected');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if mandatory fields have empty values in issue.md', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-fields-issue-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\n- **現在の問題点**: \n- **背景と真の動機**: 背景あり\n- **放置した場合の影響**: リスクあり\n\n## 3. 排除するリスク (Risks to Eliminate)\n- **リスク 1**: リスク対策あり\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Empty mandatory specification field detected');
       } finally {
         fs.rmSync(tempProject, { recursive: true, force: true });
       }

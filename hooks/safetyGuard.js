@@ -1,5 +1,5 @@
 /**
- * Safety Guard Hook (.agents/hooks/safetyGuard.js)
+ * Safety Guard Hook (hooks/safetyGuard.js)
  * 
  * Enforces execution safety:
  * 1. Prohibits direct gh pr merge by the agent (merging is exclusively performed by human).
@@ -8,9 +8,11 @@
  *    without explicit positive timeout to prevent process hangs.
  */
 
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { readStdinJson, writeStdoutJson } from './hookUtils.js';
+import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
+import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
  * Validates that gh pr merge is not executed directly by autonomous agents.
@@ -28,15 +30,42 @@ function verifyGhPrMergeProhibited(commandLine) {
 /**
  * Validates that interactive watch tests causing process hang are not executed.
  */
-function verifyNonInteractiveTestExecution(commandLine) {
-  if (/\bnpm(?:\.cmd)?\s+(?:run\s+)?test\b/i.test(commandLine) && 
-      !/--run\b/i.test(commandLine) && 
-      !/\btest:(?:run|coverage|fast|related)\b/i.test(commandLine)) {
+function verifyNonInteractiveTestExecution(commandLine, config = {}) {
+  // Check if explicitly allowed in config (allowedTestCommands)
+  const allowedCommands = config.allowedTestCommands || [];
+  if (Array.isArray(allowedCommands)) {
+    for (const allowed of allowedCommands) {
+      if (typeof allowed === 'string' && commandLine.trim() === allowed.trim()) {
+        return { decision: 'allow' };
+      }
+      if (allowed instanceof RegExp && allowed.test(commandLine)) {
+        return { decision: 'allow' };
+      }
+    }
+  }
+
+  // Detect npm test invocations
+  if (/\bnpm(?:\.cmd)?\s+(?:run\s+)?test\b/i.test(commandLine)) {
+    // 1. Check for standard npm argument-separated non-interactive flags (npm test -- --run / --watch=false)
+    const hasForwardedFlag = /--\s+.*(?:--run\b|--watch=false|--no-watch|--ci\b)/i.test(commandLine);
+
+    // 2. Check for direct non-interactive flags (supported by vitest, etc.)
+    const hasDirectFlag = /--run\b/i.test(commandLine) || 
+      /(?:--watch=false|--no-watch|--watchAll=false|--ci\b)/i.test(commandLine);
+
+    // 3. Check for dedicated non-interactive scripts
+    const hasNonInteractiveScript = /\btest:(?:run|coverage|fast|related)\b/i.test(commandLine);
+
+    if (hasForwardedFlag || hasDirectFlag || hasNonInteractiveScript) {
+      return { decision: 'allow' };
+    }
+
     return {
       decision: 'deny',
-      reason: "[SafetyGuard Denied] Interactive test runner detected. Use 'npm run test:fast', 'npm run test:related', or 'npm run test:run' for deterministic execution.",
+      reason: "[SafetyGuard Denied] Interactive test runner detected. Specify a non-interactive flag (e.g. 'npm test -- --run', 'npm test -- --watch=false') or configure 'allowedTestCommands' in 'review-loop.config.json' for deterministic execution.",
     };
   }
+
   return { decision: 'allow' };
 }
 
@@ -90,7 +119,7 @@ function verifyPowerShellWebTimeoutSpecified(commandLine) {
   return { decision: 'allow' };
 }
 
-export function handleSafetyGuard(payload = {}) {
+export function handleSafetyGuard(payload = {}, options = {}) {
   const toolCall = payload.toolCall || {};
   const toolName = toolCall.name || '';
   const args = toolCall.args || {};
@@ -101,11 +130,14 @@ export function handleSafetyGuard(payload = {}) {
   }
 
   const trimmed = commandLine.trim();
+  const currentScriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = options.projectRoot !== undefined ? options.projectRoot : findProjectRoot(currentScriptDir);
+  const config = options.config || (projectRoot ? loadConfig(projectRoot) : {});
 
   // Safety verification pipeline
   const checks = [
     () => verifyGhPrMergeProhibited(trimmed),
-    () => verifyNonInteractiveTestExecution(trimmed),
+    () => verifyNonInteractiveTestExecution(trimmed, config),
     () => verifyCurlTimeoutSpecified(trimmed),
     () => verifyPowerShellWebTimeoutSpecified(trimmed),
   ];

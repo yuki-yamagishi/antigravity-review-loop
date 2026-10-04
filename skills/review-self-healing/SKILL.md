@@ -5,7 +5,7 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
 
 # レビュー & 自己修復ループ Runbook (review-self-healing)
 
-このスキルは、**JobEval** における PR 作成後の自律的自己修復ループ、リモート CI 監視、および人間マージ完了までの手順を定めます。
+このスキルは、プロジェクトにおける PR 作成後の自律的自己修復ループ、リモート CI 監視、および人間マージ完了までの手順を定めます。
 
 ---
 
@@ -15,7 +15,7 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    `gh pr create` 実行前に、以下が満たされている必要があります（満たされていない場合は `prePrAuditGate.js`（`pre-pr-audit-gate` フック）により物理ブロックされます）：
    - **4軸ドキュメントの完備**: `docs/issues/<Issue>/` 配下に `issue.md`, `pre_verification.md`, `plan.md`, `walkthrough.md` がすべて存在し、内容が記載されていること。
    - **Pre-PR DoD（PR作成前受け入れ基準）の完全達成**: `issue.md` 内の「5.2. PR作成前プロセス完了基準 (Pre-PR Process DoD)」（旧フォーマットでは 5.1）に未チェック項目（`- [ ]`）が残っていないこと（すべて `[x]` に更新済であること）。
-   - **SSOT (`architecture_overview.md`) と最新 ADR の同期**: `docs/adr/` 配下の最新 ADR が `docs/architecture_overview.md` に登録・反映されていること。
+   - **SSOT と ADR の同期 (運用されている場合)**: プロジェクトで `docs/adr/` および `docs/architecture_overview.md` を運用している場合、最新 ADR が `docs/architecture_overview.md`（SSOT）に登録・反映されていること。
 
 2. **PR 作成**:
    ```bash
@@ -69,7 +69,7 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    - **片方のみ完了時**: もう片方の完了を待つため、`STATUS.REVIEW_REQUESTED` に留まり、Stop フックにより停止はブロックされます。
 2. **手元自己修復コミット**:
    - 両レビュアーからの指摘事項（コード品質および完了性・Why/リスク）を修正し、テストを追加。
-   - `npm.cmd run check` で 100% PASS を確認後、追加コミット＆プッシュ。
+   - プロジェクトのテスト・品質ゲート（例: `npm test -- --run` やプロジェクト定義のチェックコマンド）で 100% PASS を確認後、追加コミット＆プッシュ。
    - GitHub Actions CI がパスするまで待機（`gh pr checks`）。
 3. **公式修正報告の投稿 & 再レビュー待機遷移**:
    ```bash
