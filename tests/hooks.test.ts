@@ -361,12 +361,15 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       });
       expect(safeFileResult.decision).toBe('allow');
 
-      // Command-line tampering
+      // Command-line tampering (including PowerShell aliases)
       const tamperingCommands = [
         'rm review-loop.config.json',
         'del .agents/review-loop.config.json',
         'Set-Content review-loop.config.json "{}"',
+        'sc review-loop.config.json "{}"',
         'Remove-Item .agents/review-loop.config.json',
+        'ri .agents/review-loop.config.json',
+        'ni review-loop.config.json',
         'git checkout -- review-loop.config.json',
         'echo {} > review-loop.config.json',
       ];

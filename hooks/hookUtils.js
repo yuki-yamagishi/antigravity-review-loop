@@ -74,7 +74,7 @@ export function findPluginRoot(startDir) {
 export function findProjectRoot(startDir) {
   let cur = path.resolve(startDir);
   while (cur && path.dirname(cur) !== cur) {
-    if (path.basename(cur) === '.agents' || cur.split(path.sep).includes('.agents')) {
+    if (path.basename(cur) === '.agents' || cur.split(/[\\/]+/).includes('.agents')) {
       cur = path.dirname(cur);
       continue;
     }
@@ -95,7 +95,14 @@ export function findIssueDir(issuesDir, issueNum) {
     const entries = fs.readdirSync(issuesDir);
     const prefixPadded = `ISSUE-${String(issueNum).padStart(3, '0')}`;
     const prefixRaw = `ISSUE-${issueNum}`;
-    return entries.find((e) => e.startsWith(prefixPadded) || e.startsWith(prefixRaw)) || null;
+    return entries.find((e) => {
+      if (!e.startsWith(prefixPadded) && !e.startsWith(prefixRaw)) return false;
+      try {
+        return fs.statSync(path.join(issuesDir, e)).isDirectory();
+      } catch {
+        return true;
+      }
+    }) || null;
   } catch {
     return null;
   }
