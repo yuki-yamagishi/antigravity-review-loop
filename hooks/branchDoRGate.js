@@ -132,15 +132,16 @@ function verifyGitHubIssueStatus(exec, issueNum, projectRoot, readyLabels = ['st
       const hasReadyLabel = labels.some((labelName) =>
         readyLabels.some((configured) => {
           if (configured instanceof RegExp) return configured.test(labelName);
-          return labelName.toLowerCase().trim() === String(configured).toLowerCase().trim() ||
-            /status:\s*(?:ready|in-progress)/i.test(labelName);
+          return labelName.toLowerCase().trim() === String(configured).toLowerCase().trim();
         })
       );
 
       if (!hasReadyLabel) {
+        const requiredDesc = readyLabels.map((l) => `'${l}'`).join(' or ');
+        const suggestedLabel = readyLabels[0] || 'status: ready';
         return {
           decision: 'deny',
-          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not satisfy Definition of Ready (current labels: [${labels.join(', ')}]). The issue must have 'status: ready' or 'status: in-progress' label before creating a branch. (Remediation Guidance: Add 'status: ready' via 'gh issue edit ${issueNum} --add-label "status: ready"' after completing requirements.)`,
+          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not satisfy Definition of Ready (current labels: [${labels.join(', ')}]). The issue must have ${requiredDesc} label before creating a branch. (Remediation Guidance: Add '${suggestedLabel}' via 'gh issue edit ${issueNum} --add-label "${suggestedLabel}"' after completing requirements.)`,
         };
       }
     }
@@ -283,8 +284,16 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
   const issuesDir = path.resolve(projectRoot, issuesDirRel);
 
   // Template guide paths for messages
-  const templateIssueGuide = 'templates/template_issue.md';
-  const templatePreVerifGuide = 'templates/template_pre_verification.md';
+  let templateIssueGuide = 'templates/template_issue.md';
+  let templatePreVerifGuide = 'templates/template_pre_verification.md';
+  if (pluginRoot && projectRoot) {
+    const relIssue = path.relative(projectRoot, path.resolve(pluginRoot, 'templates/template_issue.md')).replace(/\\/g, '/');
+    const relPreVerif = path.relative(projectRoot, path.resolve(pluginRoot, 'templates/template_pre_verification.md')).replace(/\\/g, '/');
+    if (!relIssue.startsWith('..')) {
+      templateIssueGuide = relIssue;
+      templatePreVerifGuide = relPreVerif;
+    }
+  }
 
   // Step 1: Working tree cleanliness
   const cleanlinessResult = verifyWorkingTreeCleanliness(exec, projectRoot, issuesDirRel);

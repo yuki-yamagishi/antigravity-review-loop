@@ -15,10 +15,13 @@ import { readStdinJson, writeStdoutJson, findProjectRoot, findIssueDir } from '.
 import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
- * Step 1: Validates 4-axis documents completeness (issue.md, pre_verification.md, plan.md, walkthrough.md).
+ * Step 1: Validates required axis documents completeness (defaults to issue.md, pre_verification.md, plan.md, walkthrough.md).
  */
-function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir) {
-  const REQUIRED_DOCS = ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'];
+function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir, config = {}) {
+  const REQUIRED_DOCS = Array.isArray(config.requiredAxisDocs) && config.requiredAxisDocs.length > 0
+    ? config.requiredAxisDocs
+    : ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'];
+  const issuesDirRel = config.issuesDir || 'docs/issues';
   const missingDocs = [];
   for (const doc of REQUIRED_DOCS) {
     const docPath = path.resolve(targetPath, doc);
@@ -29,7 +32,7 @@ function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir) {
   if (missingDocs.length > 0) {
     return {
       decision: 'deny',
-      reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: Missing or incomplete 4-axis document(s) in docs/issues/${targetIssueDir}: ${missingDocs.join(', ')}. (Remediation Guidance: Complete all 4 documents before creating a PR.)`,
+      reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: Missing or incomplete 4-axis document(s) in ${issuesDirRel}/${targetIssueDir}: ${missingDocs.join(', ')}. (Remediation Guidance: Complete all required documents [${REQUIRED_DOCS.join(', ')}] before creating a PR.)`,
     };
   }
   return { decision: 'allow' };
@@ -68,9 +71,11 @@ function verifyAcceptanceCriteriaCompleted(targetPath, targetIssueDir) {
 /**
  * Step 3: Validates synchronization between SSOT (architecture_overview.md) and latest ADR.
  */
-function verifySsotAndAdrSynchronized(projectRoot) {
-  const adrDir = path.resolve(projectRoot, 'docs/adr');
-  const ssotPath = path.resolve(projectRoot, 'docs/architecture_overview.md');
+function verifySsotAndAdrSynchronized(projectRoot, config = {}) {
+  const adrDirRel = config.adrDir || 'docs/adr';
+  const ssotFileRel = config.ssotFile || 'docs/architecture_overview.md';
+  const adrDir = path.resolve(projectRoot, adrDirRel);
+  const ssotPath = path.resolve(projectRoot, ssotFileRel);
   if (fs.existsSync(adrDir) && fs.existsSync(ssotPath)) {
     const adrFiles = fs.readdirSync(adrDir)
       .filter((f) => /^\d{4}-.*\.md$/.test(f))
@@ -86,7 +91,7 @@ function verifySsotAndAdrSynchronized(projectRoot) {
         if (!hasLatestAdr) {
           return {
             decision: 'deny',
-            reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: The latest ADR (${latestAdrFile}) is not synchronized in docs/architecture_overview.md (SSOT). (Remediation Guidance: Update docs/architecture_overview.md to reference ADR-${latestNum} before creating a PR.)`,
+            reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: The latest ADR (${latestAdrFile}) is not synchronized in ${ssotFileRel} (SSOT). (Remediation Guidance: Update ${ssotFileRel} to reference ADR-${latestNum} before creating a PR.)`,
           };
         }
       }
@@ -134,7 +139,7 @@ export function handlePrePrAuditGate(payload = {}, options = {}) {
       const targetPath = path.resolve(issuesDir, targetIssueDir);
 
       // Step 1: 4-axis documents completeness check
-      const docsResult = verifyFourAxisDocumentsComplete(targetPath, targetIssueDir);
+      const docsResult = verifyFourAxisDocumentsComplete(targetPath, targetIssueDir, config);
       if (docsResult.decision === 'deny') {
         return docsResult;
       }
@@ -148,7 +153,7 @@ export function handlePrePrAuditGate(payload = {}, options = {}) {
   }
 
   // Step 3: SSOT (architecture_overview.md) & latest ADR synchronization check
-  const ssotResult = verifySsotAndAdrSynchronized(projectRoot);
+  const ssotResult = verifySsotAndAdrSynchronized(projectRoot, config);
   if (ssotResult.decision === 'deny') {
     return ssotResult;
   }

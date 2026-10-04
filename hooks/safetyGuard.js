@@ -29,43 +29,52 @@ function verifyGhPrMergeProhibited(commandLine) {
 
 /**
  * Validates that interactive watch tests causing process hang are not executed.
+ * Non-interactive flags are only honoured when forwarded to the script after '--'
+ * (before '--', npm interprets them as its own config and the runner never sees them).
  */
 function verifyNonInteractiveTestExecution(commandLine, config = {}) {
-  // Check if explicitly allowed in config (allowedTestCommands)
-  const allowedCommands = config.allowedTestCommands || [];
-  if (Array.isArray(allowedCommands)) {
-    for (const allowed of allowedCommands) {
-      if (typeof allowed === 'string' && commandLine.trim() === allowed.trim()) {
-        return { decision: 'allow' };
-      }
-      if (allowed instanceof RegExp && allowed.test(commandLine)) {
-        return { decision: 'allow' };
-      }
-    }
+  const allowedCommands = Array.isArray(config.allowedTestCommands) ? config.allowedTestCommands : [];
+  if (allowedCommands.some((allowed) => typeof allowed === 'string' && commandLine.trim() === allowed.trim())) {
+    return { decision: 'allow' };
   }
 
-  // Detect npm test invocations
   if (/\bnpm(?:\.cmd)?\s+(?:run\s+)?test\b/i.test(commandLine)) {
-    // 1. Check for standard npm argument-separated non-interactive flags (npm test -- --run / --watch=false)
-    const hasForwardedFlag = /--\s+.*(?:--run\b|--watch=false|--no-watch|--ci\b)/i.test(commandLine);
+    const hasForwardedFlag = /\s--\s+(?:\S+\s+)*--(?:run|watch=false|no-watch|watchAll=false|ci)(?=\s|$)/i.test(commandLine);
+    const hasNonInteractiveScript = /\bnpm(?:\.cmd)?\s+run\s+test:(?:run|coverage|fast|related)\b/i.test(commandLine);
 
-    // 2. Check for direct non-interactive flags (supported by vitest, etc.)
-    const hasDirectFlag = /--run\b/i.test(commandLine) || 
-      /(?:--watch=false|--no-watch|--watchAll=false|--ci\b)/i.test(commandLine);
-
-    // 3. Check for dedicated non-interactive scripts
-    const hasNonInteractiveScript = /\btest:(?:run|coverage|fast|related)\b/i.test(commandLine);
-
-    if (hasForwardedFlag || hasDirectFlag || hasNonInteractiveScript) {
+    if (hasForwardedFlag || hasNonInteractiveScript) {
       return { decision: 'allow' };
     }
 
     return {
       decision: 'deny',
-      reason: "[SafetyGuard Denied] Interactive test runner detected. Specify a non-interactive flag (e.g. 'npm test -- --run', 'npm test -- --watch=false') or configure 'allowedTestCommands' in 'review-loop.config.json' for deterministic execution.",
+      reason: "[SafetyGuard Denied] Interactive test runner detected. Forward a non-interactive flag after '--' (e.g. 'npm test -- --run', 'npm test -- --watch=false'), use a dedicated script such as 'npm run test:run', or declare the exact command in 'allowedTestCommands' of review-loop.config.json.",
     };
   }
 
+  return { decision: 'allow' };
+}
+
+const CONFIG_NAME_PATTERN = /(?:^|[\\/\s"'])(?:\.agents[\\/])?(?:review-loop\.config\.json|\.review-loop\.json)\b/i;
+const WRITE_INDICATOR = />|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|tee|sed|mv|cp|rm|del|ren|truncate|git\s+(?:checkout|restore|stash|reset|clean))\b/i;
+
+/**
+ * Prevents the agent from loosening guard policy by editing the review-loop config.
+ * Config changes must be made by the human user.
+ */
+function verifyConfigNotTampered(toolName, args, commandLine) {
+  const denyResult = {
+    decision: 'deny',
+    reason: "[SafetyGuard Denied] Modifying review-loop.config.json is prohibited for autonomous agents because it controls safety guards and DoR gates. Ask the user to change it.",
+  };
+  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
+    const target = String(args.TargetFile || '');
+    if (CONFIG_NAME_PATTERN.test(` ${target}`)) return denyResult;
+    return { decision: 'allow' };
+  }
+  if (toolName === 'run_command' && CONFIG_NAME_PATTERN.test(commandLine) && WRITE_INDICATOR.test(commandLine)) {
+    return denyResult;
+  }
   return { decision: 'allow' };
 }
 
@@ -125,6 +134,11 @@ export function handleSafetyGuard(payload = {}, options = {}) {
   const args = toolCall.args || {};
   const commandLine = args.CommandLine || '';
 
+  // Prohibit modifying review-loop configuration via file write tools
+  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
+    return verifyConfigNotTampered(toolName, args, '');
+  }
+
   if (toolName !== 'run_command' || !commandLine) {
     return { decision: 'allow' };
   }
@@ -136,6 +150,7 @@ export function handleSafetyGuard(payload = {}, options = {}) {
 
   // Safety verification pipeline
   const checks = [
+    () => verifyConfigNotTampered(toolName, args, trimmed),
     () => verifyGhPrMergeProhibited(trimmed),
     () => verifyNonInteractiveTestExecution(trimmed, config),
     () => verifyCurlTimeoutSpecified(trimmed),

@@ -270,85 +270,26 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       expect(result4.reason).toContain('Interactive test runner detected');
     });
 
-    it('allows non-hanging test commands (npm run test:run, npm test --run, npm run test:coverage, test:fast, test:related)', () => {
-      const result1 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:run' },
-        },
-      });
-      expect(result1.decision).toBe('allow');
-
-      const result2 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm test --run' },
-        },
-      });
-      expect(result2.decision).toBe('allow');
-
-      const result3 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:coverage' },
-        },
-      });
-      expect(result3.decision).toBe('allow');
-
-      const result4 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:coverage' },
-        },
-      });
-      expect(result4.decision).toBe('allow');
-
-      const result5 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:fast' },
-        },
-      });
-      expect(result5.decision).toBe('allow');
-
-      const result6 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:fast' },
-        },
-      });
-      expect(result6.decision).toBe('allow');
-
-      const result7 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:related' },
-        },
-      });
-      expect(result7.decision).toBe('allow');
-
-      const result8 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:related' },
-        },
-      });
-      expect(result8.decision).toBe('allow');
-
-      // Additional standard non-interactive test flags
-      const nonInteractiveFlags = [
-        'npm test --watch=false',
-        'npm.cmd test --watch=false',
-        'npm test --no-watch',
-        'npm.cmd test --no-watch',
-        'npm test --watchAll=false',
-        'npm run test --ci',
+    it('allows dedicated non-hanging test scripts and forwarded flags after --', () => {
+      const allowedCommands = [
+        'npm run test:run',
+        'npm run test:coverage',
+        'npm.cmd run test:coverage',
+        'npm run test:fast',
+        'npm.cmd run test:fast',
+        'npm run test:related',
+        'npm.cmd run test:related',
         'npm test -- --run',
         'npm.cmd test -- --run',
         'npm test -- --watch=false',
         'npm.cmd test -- --watch=false',
+        'npm test -- --no-watch',
+        'npm.cmd test -- --no-watch',
+        'npm test -- --watchAll=false',
+        'npm test -- --ci',
+        'npm run test -- --ci',
       ];
-      for (const cmd of nonInteractiveFlags) {
+      for (const cmd of allowedCommands) {
         const result = handleSafetyGuard({
           toolCall: {
             name: 'run_command',
@@ -356,6 +297,28 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           },
         });
         expect(result.decision).toBe('allow');
+      }
+    });
+
+    it('denies npm test when flags are not forwarded after --', () => {
+      const nonForwardedCommands = [
+        'npm test --run',
+        'npm test --watch=false',
+        'npm.cmd test --watch=false',
+        'npm test --no-watch',
+        'npm.cmd test --no-watch',
+        'npm test --watchAll=false',
+        'npm run test --ci',
+      ];
+      for (const cmd of nonForwardedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Interactive test runner detected');
       }
     });
 
@@ -372,6 +335,51 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
         }
       );
       expect(result.decision).toBe('allow');
+    });
+
+    it('denies autonomous agent tampering with review-loop configuration', () => {
+      // Direct file editing tools
+      const fileToolCalls = [
+        { name: 'write_to_file', args: { TargetFile: 'review-loop.config.json' } },
+        { name: 'write_to_file', args: { TargetFile: 'c:/repo/.agents/review-loop.config.json' } },
+        { name: 'write_to_file', args: { TargetFile: '.review-loop.json' } },
+        { name: 'replace_file_content', args: { TargetFile: 'review-loop.config.json' } },
+        { name: 'multi_replace_file_content', args: { TargetFile: '.agents/review-loop.config.json' } },
+      ];
+      for (const tc of fileToolCalls) {
+        const result = handleSafetyGuard({ toolCall: tc });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Modifying review-loop.config.json is prohibited');
+      }
+
+      // Safe file editing should be allowed
+      const safeFileResult = handleSafetyGuard({
+        toolCall: {
+          name: 'write_to_file',
+          args: { TargetFile: 'docs/issues/ISSUE-001/plan.md' },
+        },
+      });
+      expect(safeFileResult.decision).toBe('allow');
+
+      // Command-line tampering
+      const tamperingCommands = [
+        'rm review-loop.config.json',
+        'del .agents/review-loop.config.json',
+        'Set-Content review-loop.config.json "{}"',
+        'Remove-Item .agents/review-loop.config.json',
+        'git checkout -- review-loop.config.json',
+        'echo {} > review-loop.config.json',
+      ];
+      for (const cmd of tamperingCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Modifying review-loop.config.json is prohibited');
+      }
     });
 
     it('denies curl commands executed without timeout', () => {
@@ -1310,6 +1318,63 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       }
     });
 
+    it('honors custom readyLabels configuration in branchDoRGate', () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-custom-label-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        // Denied when label is 'status: ready' but config requires 'dor-passed'
+        const resultDeny = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject, config: { readyLabels: ['dor-passed'] } }
+        );
+        expect(resultDeny.decision).toBe('deny');
+        expect(resultDeny.reason).toContain("'dor-passed'");
+
+        // Allowed when issue has 'dor-passed'
+        mockExec.mockImplementation((cmd: string) => {
+          if (cmd.includes('gh issue view')) {
+            return JSON.stringify({ state: 'OPEN', labels: [{ name: 'dor-passed' }] });
+          }
+          return '';
+        });
+
+        const resultAllow = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject, config: { readyLabels: ['dor-passed'] } }
+        );
+        expect(resultAllow.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
     it('executes directly via node CLI with stdin/stdout JSON protocol', () => {
       const handlerPath = path.resolve(__dirname, '../hooks/branchDoRGate.js');
       const inputPayload = JSON.stringify({
@@ -1532,6 +1597,101 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       );
 
       expect(result.decision).toBe('allow');
+    });
+
+    it('honors custom requiredAxisDocs, adrDir, and ssotFile configurations in prePrAuditGate', () => {
+      // Custom 2-axis docs: only issue.md and plan.md are required
+      fs.unlinkSync(path.join(issueDir, 'pre_verification.md'));
+      fs.unlinkSync(path.join(issueDir, 'walkthrough.md'));
+
+      const resultCustomDocs = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+          },
+        }
+      );
+      expect(resultCustomDocs.decision).toBe('allow');
+
+      // If plan.md is missing from the requiredAxisDocs, it must deny
+      fs.unlinkSync(path.join(issueDir, 'plan.md'));
+      const resultMissingCustomDoc = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+          },
+        }
+      );
+      expect(resultMissingCustomDoc.decision).toBe('deny');
+      expect(resultMissingCustomDoc.reason).toContain('plan.md');
+
+      // Recreate plan.md for ADR test
+      fs.writeFileSync(path.join(issueDir, 'plan.md'), '# Implementation Plan\nDetailed plan content\n');
+
+      // Custom adrDir and ssotFile
+      const customAdrDir = path.join(tempProject, 'custom/adr');
+      const customSsotDir = path.join(tempProject, 'custom');
+      fs.mkdirSync(customAdrDir, { recursive: true });
+      fs.writeFileSync(path.join(customAdrDir, '0005-custom-decision.md'), '# ADR-0005\n');
+      fs.writeFileSync(path.join(customSsotDir, 'architecture.md'), '# Architecture Overview\nNo ADR link yet\n');
+
+      const resultUnsyncedCustomAdr = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+            adrDir: 'custom/adr',
+            ssotFile: 'custom/architecture.md',
+          },
+        }
+      );
+      expect(resultUnsyncedCustomAdr.decision).toBe('deny');
+      expect(resultUnsyncedCustomAdr.reason).toContain('0005-custom-decision.md');
+      expect(resultUnsyncedCustomAdr.reason).toContain('custom/architecture.md');
+
+      // Sync custom SSOT
+      fs.writeFileSync(path.join(customSsotDir, 'architecture.md'), '# Architecture Overview\nSynchronized with ADR-0005\n');
+      const resultSyncedCustomAdr = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+            adrDir: 'custom/adr',
+            ssotFile: 'custom/architecture.md',
+          },
+        }
+      );
+      expect(resultSyncedCustomAdr.decision).toBe('allow');
     });
 
     it('executes directly via node CLI with stdin/stdout JSON protocol', () => {

@@ -78,7 +78,7 @@ export function findProjectRoot(startDir) {
       cur = path.dirname(cur);
       continue;
     }
-    if (fs.existsSync(path.join(cur, '.git')) || fs.existsSync(path.join(cur, 'package.json'))) {
+    if (fs.existsSync(path.join(cur, '.git')) && fs.existsSync(path.join(cur, 'package.json'))) {
       return cur;
     }
     cur = path.dirname(cur);
