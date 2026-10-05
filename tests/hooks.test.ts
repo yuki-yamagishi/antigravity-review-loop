@@ -6,7 +6,13 @@ import { execSync } from 'child_process';
 import { LoopStateMachine, STATUS } from '../state/loopState.js';
 import { handleStop } from '../hooks/stopHook.js';
 import { handleSafetyGuard } from '../hooks/safetyGuard.js';
-import { handleBranchDoRGate } from '../hooks/branchDoRGate.js';
+import {
+  handleBranchDoRGate,
+  escapePathForRegex,
+  DEFAULT_SECTION_PATTERNS,
+  DEFAULT_EMPTY_FIELD_PATTERNS,
+  DEFAULT_PLACEHOLDER_PATTERNS,
+} from '../hooks/branchDoRGate.js';
 import { handlePrePrAuditGate } from '../hooks/prePrAuditGate.js';
 import { handlePostPrCreate } from '../hooks/postPrCreate.js';
 
@@ -181,13 +187,15 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
   });
 
   describe('safetyGuard (antigravity-review-loop/hooks/safetyGuard.js)', () => {
+    const cleanOptions = { config: { allowedTestCommands: [] } };
+
     it('allows non-command tools', () => {
       const result = handleSafetyGuard({
         toolCall: {
           name: 'view_file',
           args: { AbsolutePath: 'test.txt' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('allow');
     });
 
@@ -197,7 +205,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'git status' },
         },
-      });
+      }, cleanOptions);
       expect(result1.decision).toBe('allow');
 
       const result2 = handleSafetyGuard({
@@ -205,7 +213,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm run check:fast' },
         },
-      });
+      }, cleanOptions);
       expect(result2.decision).toBe('allow');
     });
 
@@ -215,7 +223,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'gh pr merge 46 --squash' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('deny');
       expect(result.reason).toContain('gh pr merge');
       expect(result.reason).toContain('prohibited');
@@ -227,7 +235,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'gh pr merge 123 --merge' },
         },
-      });
+      }, cleanOptions);
       expect(result.decision).toBe('deny');
       expect(result.reason).toContain('gh pr merge');
     });
@@ -238,7 +246,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm test' },
         },
-      });
+      }, cleanOptions);
       expect(result1.decision).toBe('deny');
       expect(result1.reason).toContain('Interactive test runner detected');
 
@@ -247,7 +255,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm run test' },
         },
-      });
+      }, cleanOptions);
       expect(result2.decision).toBe('deny');
       expect(result2.reason).toContain('Interactive test runner detected');
 
@@ -256,7 +264,7 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm.cmd test' },
         },
-      });
+      }, cleanOptions);
       expect(result3.decision).toBe('deny');
       expect(result3.reason).toContain('Interactive test runner detected');
 
@@ -265,75 +273,127 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
           name: 'run_command',
           args: { CommandLine: 'npm.cmd run test' },
         },
-      });
+      }, cleanOptions);
       expect(result4.decision).toBe('deny');
       expect(result4.reason).toContain('Interactive test runner detected');
     });
 
-    it('allows non-hanging test commands (npm run test:run, npm test --run, npm run test:coverage, test:fast, test:related)', () => {
-      const result1 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:run' },
-        },
-      });
-      expect(result1.decision).toBe('allow');
+    it('allows dedicated non-hanging test scripts and forwarded flags after --', () => {
+      const allowedCommands = [
+        'npm run test:run',
+        'npm run test:coverage',
+        'npm.cmd run test:coverage',
+        'npm run test:fast',
+        'npm.cmd run test:fast',
+        'npm run test:related',
+        'npm.cmd run test:related',
+        'npm test -- --run',
+        'npm.cmd test -- --run',
+        'npm test -- tests/hooks.test.ts --run',
+        'npm.cmd test -- tests/hooks.test.ts --run',
+        'npm test -- tests/hooks.test.ts --watch=false',
+        'npm test -- --watch=false',
+        'npm.cmd test -- --watch=false',
+        'npm test -- --no-watch',
+        'npm.cmd test -- --no-watch',
+        'npm test -- --watchAll=false',
+        'npm test -- --ci',
+        'npm run test -- --ci',
+      ];
+      for (const cmd of allowedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        }, cleanOptions);
+        expect(result.decision).toBe('allow');
+      }
+    });
 
-      const result2 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm test --run' },
-        },
-      });
-      expect(result2.decision).toBe('allow');
+    it('denies npm test when flags are not forwarded after --', () => {
+      const nonForwardedCommands = [
+        'npm test --run',
+        'npm test --watch=false',
+        'npm.cmd test --watch=false',
+        'npm test --no-watch',
+        'npm.cmd test --no-watch',
+        'npm test --watchAll=false',
+        'npm run test --ci',
+      ];
+      for (const cmd of nonForwardedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        }, cleanOptions);
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Interactive test runner detected');
+      }
+    });
 
-      const result3 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:coverage' },
+    it('allows npm test when explicitly configured in allowedTestCommands', () => {
+      const result = handleSafetyGuard(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'npm test' },
+          },
         },
-      });
-      expect(result3.decision).toBe('allow');
+        {
+          config: { allowedTestCommands: ['npm test'] },
+        }
+      );
+      expect(result.decision).toBe('allow');
+    });
 
-      const result4 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:coverage' },
-        },
-      });
-      expect(result4.decision).toBe('allow');
+    it('denies autonomous agent tampering with review-loop configuration', () => {
+      // Direct file editing tools
+      const fileToolCalls = [
+        { name: 'write_to_file', args: { TargetFile: 'review-loop.config.json' } },
+        { name: 'write_to_file', args: { TargetFile: 'c:/repo/.agents/review-loop.config.json' } },
+        { name: 'write_to_file', args: { TargetFile: '.review-loop.json' } },
+        { name: 'replace_file_content', args: { TargetFile: 'review-loop.config.json' } },
+        { name: 'multi_replace_file_content', args: { TargetFile: '.agents/review-loop.config.json' } },
+      ];
+      for (const tc of fileToolCalls) {
+        const result = handleSafetyGuard({ toolCall: tc });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Modifying review-loop.config.json is prohibited');
+      }
 
-      const result5 = handleSafetyGuard({
+      // Safe file editing should be allowed
+      const safeFileResult = handleSafetyGuard({
         toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:fast' },
+          name: 'write_to_file',
+          args: { TargetFile: 'docs/issues/ISSUE-001/plan.md' },
         },
       });
-      expect(result5.decision).toBe('allow');
+      expect(safeFileResult.decision).toBe('allow');
 
-      const result6 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:fast' },
-        },
-      });
-      expect(result6.decision).toBe('allow');
-
-      const result7 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm run test:related' },
-        },
-      });
-      expect(result7.decision).toBe('allow');
-
-      const result8 = handleSafetyGuard({
-        toolCall: {
-          name: 'run_command',
-          args: { CommandLine: 'npm.cmd run test:related' },
-        },
-      });
-      expect(result8.decision).toBe('allow');
+      // Command-line tampering (including PowerShell aliases)
+      const tamperingCommands = [
+        'rm review-loop.config.json',
+        'del .agents/review-loop.config.json',
+        'Set-Content review-loop.config.json "{}"',
+        'sc review-loop.config.json "{}"',
+        'Remove-Item .agents/review-loop.config.json',
+        'ri .agents/review-loop.config.json',
+        'ni review-loop.config.json',
+        'git checkout -- review-loop.config.json',
+        'echo {} > review-loop.config.json',
+      ];
+      for (const cmd of tamperingCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Modifying review-loop.config.json is prohibited');
+      }
     });
 
     it('denies curl commands executed without timeout', () => {
@@ -617,6 +677,204 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
             },
           },
           { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('handles issuesDir with regex special characters (. and +) safely in working tree cleanliness check', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-special-path-'));
+      const customIssuesDir = 'spec.v2/issues+dir';
+      const issueDir = path.join(tempProject, customIssuesDir, 'ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nWhy details\n\n## 3. 排除するリスク\nRisk details\n\n## 5. 受け入れ基準\n- [ ] 機能受け入れ基準および単体テストが正常に動作すること\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\nNo duplication found.\n'
+      );
+
+      try {
+        // Allowed when untracked path matches exact special character dir
+        const mockExecAllow = vi.fn().mockReturnValue(`?? ${customIssuesDir}/ISSUE-099_test/issue.md\n`);
+        const resultAllow = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExecAllow, stateMachine: testMachine, projectRoot: tempProject, config: { issuesDir: customIssuesDir } }
+        );
+        expect(resultAllow.decision).toBe('allow');
+
+        // Denied when path matches . as wildcard (e.g. specXv2 instead of spec.v2)
+        const mockExecDeny = vi.fn().mockReturnValue('?? specXv2/issues+dir/ISSUE-099_test/issue.md\n');
+        const resultDeny = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExecDeny, stateMachine: testMachine, projectRoot: tempProject, config: { issuesDir: customIssuesDir } }
+        );
+        expect(resultDeny.decision).toBe('deny');
+        expect(resultDeny.reason).toContain('Working tree is dirty');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('escapePathForRegex correctly escapes special chars and standardizes separators', () => {
+      expect(escapePathForRegex('docs/issues')).toBe('docs[/\\\\]issues');
+      expect(escapePathForRegex('docs\\issues')).toBe('docs[/\\\\]issues');
+      expect(escapePathForRegex('spec.v2/issues+dir')).toBe('spec\\.v2[/\\\\]issues\\+dir');
+      expect(escapePathForRegex('path(1)/[group]')).toBe('path\\(1\\)[/\\\\]\\[group\\]');
+    });
+
+    it('validates placeholder patterns against unedited templates and legitimate text', () => {
+      const matchAny = (str: string) => DEFAULT_PLACEHOLDER_PATTERNS.some((p) => p.test(str));
+      expect(matchAny('<ISSUE_NUMBER>')).toBe(true);
+      expect(matchAny('<要記述: ここに書く>')).toBe(true);
+      expect(matchAny('[ここに記載]')).toBe(true);
+      expect(matchAny('YYYY-MM-DD')).toBe(true);
+      expect(matchAny('ISSUE-XXX')).toBe(true);
+      expect(matchAny('<!-- TODO: later -->')).toBe(true);
+      // Valid prose should not trigger
+      expect(matchAny('正常な文章です。問題ありません。')).toBe(false);
+      expect(matchAny('HTMLの<div>タグ')).toBe(false);
+    });
+
+    it('allows branch creation with English section headers in issue.md', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-english-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_english');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why (Background & Problem)\nClear why statement.\n\n## 3. Risks to Eliminate\nClear risk statement.\n\n## 5. Acceptance Criteria\n- [ ] Concrete verifiable unit and integration tests\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nNo duplicated logic found.\n'
+      );
+
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-english' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('supports flexible branch naming and custom branchIssuePattern', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-branch-pattern-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why\nWhy\n\n## 3. Risks to Eliminate\nRisk\n\n## 5. Acceptance Criteria\n- [ ] Pass all tests and requirements\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nClear\n'
+      );
+
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      try {
+        // 1. Matches default feat/99-test
+        const result1 = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feat/99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result1.decision).toBe('allow');
+
+        // 2. Matches custom pattern JIRA-(\d+)
+        const result2 = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feat/JIRA-99-core' },
+            },
+          },
+          {
+            execFn: mockExec,
+            stateMachine: testMachine,
+            projectRoot: tempProject,
+            config: { branchIssuePattern: 'JIRA-(\\d+)' },
+          }
+        );
+        expect(result2.decision).toBe('allow');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('supports issueTracker: "local" to bypass GitHub Issue checks', () => {
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dor-local-tracker-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_local');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. Why\nWhy\n\n## 3. Risks to Eliminate\nRisk\n\n## 5. Acceptance Criteria\n- [ ] Pass all tests and requirements\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre-Verification\n\n## 1. Date\n2026-10-05\n\n## 3. Impact & Duplication Check\nClear\n'
+      );
+
+      // mockExec throws an error that would normally deny on GitHub
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          throw new Error('HTTP 404: Could not resolve to an Issue');
+        }
+        return '';
+      });
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-local' },
+            },
+          },
+          {
+            execFn: mockExec,
+            stateMachine: testMachine,
+            projectRoot: tempProject,
+            config: { issueTracker: 'local' },
+          }
         );
         expect(result.decision).toBe('allow');
       } finally {
@@ -970,6 +1228,101 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       }
     });
 
+    it('denies branch creation if template_issue.md is copied verbatim without being filled in', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'template-copy-issue-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      const templatePath = path.resolve(__dirname, '../templates/template_issue.md');
+      const rawTemplate = fs.readFileSync(templatePath, 'utf8');
+      fs.writeFileSync(path.join(issueDir, 'issue.md'), rawTemplate);
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Unfilled template placeholder detected');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if template_pre_verification.md is copied verbatim without being filled in', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'template-copy-preverif-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      const templatePath = path.resolve(__dirname, '../templates/template_pre_verification.md');
+      const rawTemplate = fs.readFileSync(templatePath, 'utf8');
+
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(path.join(issueDir, 'pre_verification.md'), rawTemplate);
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Unfilled template placeholder detected');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('denies branch creation if mandatory fields have empty values in issue.md', () => {
+      const mockExec = vi.fn().mockReturnValue('');
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-fields-issue-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\n- **現在の問題点**: \n- **背景と真の動機**: 背景あり\n- **放置した場合の影響**: リスクあり\n\n## 3. 排除するリスク (Risks to Eliminate)\n- **リスク 1**: リスク対策あり\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        const result = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject }
+        );
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Empty mandatory specification field detected');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
     it('denies branch creation if GitHub Issue is closed', () => {
       const mockExec = vi.fn().mockImplementation((cmd: string) => {
         if (cmd.includes('gh issue view')) {
@@ -1172,6 +1525,63 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
         );
         expect(result.decision).toBe('deny');
         expect(result.reason).toContain('does not exist on GitHub');
+      } finally {
+        fs.rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it('honors custom readyLabels configuration in branchDoRGate', () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd.includes('gh issue view')) {
+          return JSON.stringify({ state: 'OPEN', labels: [{ name: 'status: ready' }] });
+        }
+        return '';
+      });
+
+      const tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-custom-label-'));
+      const issueDir = path.join(tempProject, 'docs/issues/ISSUE-099_test');
+      fs.mkdirSync(issueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(issueDir, 'issue.md'),
+        '# Issue 99\n\n## 1. 解決すべき課題・背景 (Why)\nSome why\n\n## 3. 排除するリスク (Risks to Eliminate)\nSome risk\n\n## 5. 受け入れ基準\n- **シナリオ 1: 正常系**\n  - **Given**: 初期状態\n  - **When**: 実行\n  - **Then**: 期待結果\n'
+      );
+      fs.writeFileSync(
+        path.join(issueDir, 'pre_verification.md'),
+        '# Pre Verification\n\n## 1. 日時\n2026-09-09\n\n## 3. 重複・パッチワーク点検 (Impact & Duplication Check)\n既存コード調査済み。重複なし。'
+      );
+
+      try {
+        // Denied when label is 'status: ready' but config requires 'dor-passed'
+        const resultDeny = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject, config: { readyLabels: ['dor-passed'] } }
+        );
+        expect(resultDeny.decision).toBe('deny');
+        expect(resultDeny.reason).toContain("'dor-passed'");
+
+        // Allowed when issue has 'dor-passed'
+        mockExec.mockImplementation((cmd: string) => {
+          if (cmd.includes('gh issue view')) {
+            return JSON.stringify({ state: 'OPEN', labels: [{ name: 'dor-passed' }] });
+          }
+          return '';
+        });
+
+        const resultAllow = handleBranchDoRGate(
+          {
+            toolCall: {
+              name: 'run_command',
+              args: { CommandLine: 'git checkout -b feature/issue-99-test' },
+            },
+          },
+          { execFn: mockExec, stateMachine: testMachine, projectRoot: tempProject, config: { readyLabels: ['dor-passed'] } }
+        );
+        expect(resultAllow.decision).toBe('allow');
       } finally {
         fs.rmSync(tempProject, { recursive: true, force: true });
       }
@@ -1399,6 +1809,101 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       );
 
       expect(result.decision).toBe('allow');
+    });
+
+    it('honors custom requiredAxisDocs, adrDir, and ssotFile configurations in prePrAuditGate', () => {
+      // Custom 2-axis docs: only issue.md and plan.md are required
+      fs.unlinkSync(path.join(issueDir, 'pre_verification.md'));
+      fs.unlinkSync(path.join(issueDir, 'walkthrough.md'));
+
+      const resultCustomDocs = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+          },
+        }
+      );
+      expect(resultCustomDocs.decision).toBe('allow');
+
+      // If plan.md is missing from the requiredAxisDocs, it must deny
+      fs.unlinkSync(path.join(issueDir, 'plan.md'));
+      const resultMissingCustomDoc = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+          },
+        }
+      );
+      expect(resultMissingCustomDoc.decision).toBe('deny');
+      expect(resultMissingCustomDoc.reason).toContain('plan.md');
+
+      // Recreate plan.md for ADR test
+      fs.writeFileSync(path.join(issueDir, 'plan.md'), '# Implementation Plan\nDetailed plan content\n');
+
+      // Custom adrDir and ssotFile
+      const customAdrDir = path.join(tempProject, 'custom/adr');
+      const customSsotDir = path.join(tempProject, 'custom');
+      fs.mkdirSync(customAdrDir, { recursive: true });
+      fs.writeFileSync(path.join(customAdrDir, '0005-custom-decision.md'), '# ADR-0005\n');
+      fs.writeFileSync(path.join(customSsotDir, 'architecture.md'), '# Architecture Overview\nNo ADR link yet\n');
+
+      const resultUnsyncedCustomAdr = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+            adrDir: 'custom/adr',
+            ssotFile: 'custom/architecture.md',
+          },
+        }
+      );
+      expect(resultUnsyncedCustomAdr.decision).toBe('deny');
+      expect(resultUnsyncedCustomAdr.reason).toContain('0005-custom-decision.md');
+      expect(resultUnsyncedCustomAdr.reason).toContain('custom/architecture.md');
+
+      // Sync custom SSOT
+      fs.writeFileSync(path.join(customSsotDir, 'architecture.md'), '# Architecture Overview\nSynchronized with ADR-0005\n');
+      const resultSyncedCustomAdr = handlePrePrAuditGate(
+        {
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: 'gh pr create --title "feat: test"' },
+          },
+        },
+        {
+          currentBranch: 'feature/issue-99-test',
+          projectRoot: tempProject,
+          config: {
+            requiredAxisDocs: ['issue.md', 'plan.md'],
+            adrDir: 'custom/adr',
+            ssotFile: 'custom/architecture.md',
+          },
+        }
+      );
+      expect(resultSyncedCustomAdr.decision).toBe('allow');
     });
 
     it('executes directly via node CLI with stdin/stdout JSON protocol', () => {

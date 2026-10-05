@@ -1,5 +1,5 @@
 /**
- * Branch DoR Gate Hook (.agents/hooks/branchDoRGate.js)
+ * Branch DoR Gate Hook (hooks/branchDoRGate.js)
  * 
  * Enforces Definition of Ready (DoR) before creating a topic branch:
  * 1. Working tree cleanliness (no uncommitted dirty changes).
@@ -7,27 +7,67 @@
  * 3. GitHub Issue state and DoR label (status: ready) validation.
  * 4. Why-First & Risks to Eliminate validation in docs/issues/ISSUE-XXX/issue.md.
  * 5. Impact & Duplication Check validation in docs/issues/ISSUE-XXX/pre_verification.md.
- * 6. Template placeholder elimination in specification documents.
+ * 6. Template placeholder elimination and mandatory field validation.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
+import { readStdinJson, writeStdoutJson, findProjectRoot, findPluginRoot, findIssueDir } from './hookUtils.js';
 import { defaultStateMachine, STATUS } from '../state/loopState.js';
+import { loadConfig } from '../config/reviewLoopConfig.js';
+
+/**
+ * Escapes regex special characters in a path and normalizes separators for regex matching.
+ */
+export function escapePathForRegex(pathStr) {
+  const normalized = String(pathStr).replace(/\\/g, '/');
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return escaped.replace(/\/+/g, '[/\\\\]');
+}
+
+export const DEFAULT_SECTION_PATTERNS = Object.freeze({
+  why: /##\s+(?:\d+\.\s+)?(?:(?:解決すべき課題・背景|解決する課題・背景)(?:\s*\([^)]*Why[^)]*\))?|(?:Background\s*(?:&|and)\s*)?Why\b|Problem\s*(?:Statement)?\b|Background\b)/i,
+  risk: /##\s+(?:\d+\.\s+)?(?:排除するリスク(?:\s*\([^)]*Risks?[^)]*\))?|Risks?\s*(?:to\s*Eliminate)?\b)/i,
+  criteria: /##\s+(?:\d+\.\s+)?(?:受け入れ基準|受入基準|(?:Acceptance Criteria|Definition of Done|DoD)\b)/i,
+  impact: /##\s+(?:\d+\.\s+)?(?:重複・パッチワーク点検|重複・影響調査|Impact\s*(?:&|and)\s*Duplication\s*Check)/i,
+});
+
+export const DEFAULT_EMPTY_FIELD_PATTERNS = Object.freeze([
+  /^[ \t]*-[ \t]+\*\*(?:現在の問題点|背景と真の動機|放置した場合の影響|Current Problem|Root Cause|Impact if Unresolved)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:リスク\s*\d+|Risk\s*\d+)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:Given|When|Then)\*\*[ \t]*:[ \t]*$/im,
+  /^[ \t]*-[ \t]+\*\*(?:対象コンポーネント|既存の挙動|変更対象ファイル|影響を受けるコンポーネント|既存の類似機能・共通基盤の有無|過去の ADR \/ 設計決定との整合性|根本的解決（リファクタリング含む）の妥当性判断|検証項目|実行コマンド \/ 手順|検証結果|Target Components?|Existing Behavior|Modified Files|Impacted Components?|Verification Steps?|Verification Results?)\*\*[ \t]*:[ \t]*$/im,
+]);
+
+export const DEFAULT_PLACEHOLDER_PATTERNS = Object.freeze([
+  /\[ここに対象/i,
+  /\[ここに[^\]\r\n]*(?:記載|記述)\]/i,
+  /\[記入(?:してください)?\]/i,
+  /<!--\s*TODO/i,
+  /\bTODO:\s*(?:TBD|未定|後で書く)/i,
+  /\[(?:TODO|TBD|未定)[^\]\r\n]*\]/i,
+  /\{\{(?:TODO|TBD|未定|ISSUE|TITLE)[^}\r\n]*\}\}/i,
+  /<(?:番号|簡潔な目的|シナリオ|前提|初期状態|操作|入力|期待|不正入力|境界値|異常値|エラー|要記述|TBD|ISSUE_NUMBER|ISSUE_TITLE|TODO|REPLACE_ME)[^>]*>/i,
+  /<(?:前提条件|初期状態|実行される操作|入力データ|期待される結果|境界値・異常系・拒絶シナリオ名称)[^>]*>/i,
+  /\bYYYY-MM-DD\b/,
+  /\b(?:ADR-XXXX|ISSUE-XXX)\b/,
+]);
 
 /**
  * Step 1: Validates working tree cleanliness.
  * Prohibits creating branches with uncommitted dirty changes (except untracked docs/issues/).
  */
-function verifyWorkingTreeCleanliness(exec, projectRoot) {
+function verifyWorkingTreeCleanliness(exec, projectRoot, issuesDirName = 'docs/issues') {
   try {
     const statusOut = exec('git status --porcelain', { cwd: projectRoot, encoding: 'utf8' }).trim();
     if (statusOut.length > 0) {
       const lines = statusOut.split('\n').map((l) => l.trim()).filter(Boolean);
       // Allow untracked docs/issues/ files created for the new issue, but block any modified, deleted, staged, or other untracked files
-      const dirtyLines = lines.filter((l) => !/^\?\?\s+"?docs[/\\]issues[/\\]/i.test(l));
+      const escapedDir = escapePathForRegex(issuesDirName);
+      const issuesRegex = new RegExp(`^\\?\\?\\s+"?${escapedDir}[/\\\\]`, 'i');
+      const dirtyLines = lines.filter((l) => !issuesRegex.test(l));
       if (dirtyLines.length > 0) {
         return {
           decision: 'deny',
@@ -57,36 +97,45 @@ function verifyLoopStateIdle(stateMachine) {
 }
 
 /**
- * Step 3: Validates that template placeholders are not left unfilled in specification files.
+ * Step 3: Validates that template placeholders and empty mandatory fields are not left unfilled.
  */
-function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir) {
-  const placeholderPatterns = [
-    /\[ここに対象/i,
-    /\[ここに[^\]\r\n]*(?:記載|記述)\]/i,
-    /\[記入(?:してください)?\]/i,
-    /<!--\s*TODO/i,
-    /\bTODO:\s*(?:TBD|未定|後で書く)/i,
-    /<(?:番号|簡潔な目的|シナリオ|前提|初期状態|操作|入力|期待|不正入力|境界値|異常値|エラー|要記述|TBD)[^>]*>/i,
-    /<[ぁ-んァ-ヶー一-龠]+>/,
-    /\bYYYY-MM-DD\b/,
-    /\b(?:ADR-XXXX|ISSUE-XXX)\b/,
-  ];
-
-  for (const pattern of placeholderPatterns) {
+export function verifyNoTemplatePlaceholders(content, fileName, targetIssueDir, issuesRelDir = 'docs/issues') {
+  for (const pattern of DEFAULT_PLACEHOLDER_PATTERNS) {
     if (pattern.test(content)) {
       return {
         decision: 'deny',
-        reason: `[BranchDoRGate Denied] Unfilled template placeholder detected in docs/issues/${targetIssueDir}/${fileName}. Fill in all specification details and remove template placeholders before creating a branch.`,
+        reason: `[BranchDoRGate Denied] Unfilled template placeholder detected in ${issuesRelDir}/${targetIssueDir}/${fileName}. Fill in all specification details and remove template placeholders before creating a branch.`,
       };
     }
   }
+
+  // Detect empty mandatory field lines (e.g. "- **現在の問題点**: \n" or "- **Given**: \n")
+  for (const pattern of DEFAULT_EMPTY_FIELD_PATTERNS) {
+    if (pattern.test(content)) {
+      return {
+        decision: 'deny',
+        reason: `[BranchDoRGate Denied] Empty mandatory specification field detected in ${issuesRelDir}/${targetIssueDir}/${fileName}. Fill in all required fields before creating a branch.`,
+      };
+    }
+  }
+
   return { decision: 'allow' };
 }
 
 /**
  * Step 4: Validates GitHub Issue existence, open state, and DoR label (status: ready).
  */
-function verifyGitHubIssueStatus(exec, issueNum, projectRoot) {
+function verifyGitHubIssueStatus(
+  exec,
+  issueNum,
+  projectRoot,
+  readyLabels = ['status: ready', 'status: in-progress'],
+  issueTracker = 'auto',
+  hasLocalIssueDoc = false
+) {
+  if (issueTracker === 'local' || issueTracker === 'none') {
+    return { decision: 'allow' };
+  }
   try {
     const out = exec(`gh issue view ${issueNum} --json state,labels`, {
       cwd: projectRoot,
@@ -104,11 +153,20 @@ function verifyGitHubIssueStatus(exec, issueNum, projectRoot) {
       const labels = Array.isArray(data.labels)
         ? data.labels.map((l) => (typeof l === 'string' ? l : l.name || ''))
         : [];
-      const hasReadyOrInProgress = labels.some((l) => /status:\s*(?:ready|in-progress)/i.test(l));
-      if (!hasReadyOrInProgress) {
+      
+      const hasReadyLabel = labels.some((labelName) =>
+        readyLabels.some((configured) => {
+          if (configured instanceof RegExp) return configured.test(labelName);
+          return labelName.toLowerCase().trim() === String(configured).toLowerCase().trim();
+        })
+      );
+
+      if (!hasReadyLabel) {
+        const requiredDesc = readyLabels.map((l) => `'${l}'`).join(' or ');
+        const suggestedLabel = readyLabels[0] || 'status: ready';
         return {
           decision: 'deny',
-          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not satisfy Definition of Ready (current labels: [${labels.join(', ')}]). The issue must have 'status: ready' or 'status: in-progress' label before creating a branch. (Remediation Guidance: Add 'status: ready' via 'gh issue edit ${issueNum} --add-label "status: ready"' after completing requirements.)`,
+          reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not satisfy Definition of Ready (current labels: [${labels.join(', ')}]). The issue must have ${requiredDesc} label before creating a branch. (Remediation Guidance: Add '${suggestedLabel}' via 'gh issue edit ${issueNum} --add-label "${suggestedLabel}"' after completing requirements.)`,
         };
       }
     }
@@ -119,6 +177,9 @@ function verifyGitHubIssueStatus(exec, issueNum, projectRoot) {
       return { decision: 'allow' };
     }
     if (/Could not resolve to an Issue/i.test(errMsg) || /\bissue.*not found\b/i.test(errMsg) || /HTTP 404/i.test(errMsg)) {
+      if (issueTracker === 'auto' && hasLocalIssueDoc) {
+        return { decision: 'allow' };
+      }
       return {
         decision: 'deny',
         reason: `[BranchDoRGate Denied] GitHub Issue #${issueNum} does not exist on GitHub. Create the issue on GitHub before creating a branch.`,
@@ -131,19 +192,19 @@ function verifyGitHubIssueStatus(exec, issueNum, projectRoot) {
 /**
  * Step 5: Validates Why-First, Risk Elimination, and Acceptance Criteria definitions in issue.md.
  */
-function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
+function verifyWhyAndRiskSections(issuesDir, targetIssueDir, templateGuidePath = 'templates/template_issue.md', issuesRelDir = 'docs/issues') {
   const issueMdPath = path.resolve(issuesDir, targetIssueDir, 'issue.md');
   if (!fs.existsSync(issueMdPath)) {
     return {
       decision: 'deny',
-      reason: `[BranchDoRGate Denied] issue.md does not exist in ${targetIssueDir}. (Remediation Guidance: Create 'docs/issues/${targetIssueDir}/issue.md' using 'docs/issues/template_issue.md' before creating a branch.)`,
+      reason: `[BranchDoRGate Denied] issue.md does not exist in ${targetIssueDir}. (Remediation Guidance: Create '${issuesRelDir}/${targetIssueDir}/issue.md' using '${templateGuidePath}' before creating a branch.)`,
     };
   }
 
   const issueContent = fs.readFileSync(issueMdPath, 'utf8');
-  const hasWhySection = /##\s+(?:\d+\.\s+)?(?:解決すべき課題・背景|解決する課題・背景)\s*(?:\([^)]*Why[^)]*\))?/i.test(issueContent);
-  const hasRiskSection = /##\s+(?:\d+\.\s+)?(?:排除するリスク)\s*(?:\([^)]*Risks?[^)]*\))?/i.test(issueContent);
-  const hasCriteriaSection = /##\s+(?:\d+\.\s+)?(?:受け入れ基準|受入基準|(?:Acceptance Criteria|Definition of Done|DoD)\b)/i.test(issueContent);
+  const hasWhySection = DEFAULT_SECTION_PATTERNS.why.test(issueContent);
+  const hasRiskSection = DEFAULT_SECTION_PATTERNS.risk.test(issueContent);
+  const hasCriteriaSection = DEFAULT_SECTION_PATTERNS.criteria.test(issueContent);
 
   if (!hasWhySection || !hasRiskSection || !hasCriteriaSection) {
     const missing = [];
@@ -152,7 +213,7 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
     if (!hasCriteriaSection) missing.push("'Acceptance Criteria / Definition of Done'");
     return {
       decision: 'deny',
-      reason: `[BranchDoRGate Denied] Missing required sections in ${targetIssueDir}/issue.md: ${missing.join(', ')}. Define the root problem (Why), risks, and concrete acceptance criteria before jumping into implementation (What). (Remediation Guidance: Refer to 'docs/issues/template_issue.md' and add the required sections.)`,
+      reason: `[BranchDoRGate Denied] Missing required sections in ${targetIssueDir}/issue.md: ${missing.join(', ')}. Define the root problem (Why), risks, and concrete acceptance criteria before jumping into implementation (What). (Remediation Guidance: Refer to '${templateGuidePath}' and add the required sections.)`,
     };
   }
 
@@ -171,7 +232,7 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
     if (hasVagueWords) {
       return {
         decision: 'deny',
-        reason: `[BranchDoRGate Denied] Acceptance Criteria in ${targetIssueDir}/issue.md contains ambiguous terms ('適切に', 'よしなに', or '必要に応じて'). Define concrete Given-When-Then scenarios with verifiable expectations before creating a branch. (Remediation Guidance: Use 'fleet_dor_auditor' to audit and refine 'docs/issues/${targetIssueDir}/issue.md'.)`,
+        reason: `[BranchDoRGate Denied] Acceptance Criteria in ${targetIssueDir}/issue.md contains ambiguous terms ('適切に', 'よしなに', or '必要に応じて'). Define concrete Given-When-Then scenarios with verifiable expectations before creating a branch. (Remediation Guidance: Use 'fleet_dor_auditor' to audit and refine '${issuesRelDir}/${targetIssueDir}/issue.md'.)`,
       };
     }
 
@@ -179,13 +240,13 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
     if (!hasConcreteItems || criteriaBody.trim().length < 40) {
       return {
         decision: 'deny',
-        reason: `[BranchDoRGate Denied] Acceptance Criteria in ${targetIssueDir}/issue.md is empty or too vague. Define concrete Given-When-Then scenarios or DoD checklists to eliminate ambiguity before creating a branch. (Remediation Guidance: Use 'fleet_dor_auditor' to audit and refine 'docs/issues/${targetIssueDir}/issue.md'.)`,
+        reason: `[BranchDoRGate Denied] Acceptance Criteria in ${targetIssueDir}/issue.md is empty or too vague. Define concrete Given-When-Then scenarios or DoD checklists to eliminate ambiguity before creating a branch. (Remediation Guidance: Use 'fleet_dor_auditor' to audit and refine '${issuesRelDir}/${targetIssueDir}/issue.md'.)`,
       };
     }
   }
 
   // Verify no template placeholders remain
-  const placeholderResult = verifyNoTemplatePlaceholders(issueContent, 'issue.md', targetIssueDir);
+  const placeholderResult = verifyNoTemplatePlaceholders(issueContent, 'issue.md', targetIssueDir, issuesRelDir);
   if (placeholderResult.decision === 'deny') {
     return placeholderResult;
   }
@@ -196,26 +257,26 @@ function verifyWhyAndRiskSections(issuesDir, targetIssueDir) {
 /**
  * Step 6: Validates Impact & Duplication Check documentation in pre_verification.md.
  */
-function verifyImpactDuplicationCheck(issuesDir, targetIssueDir) {
+function verifyImpactDuplicationCheck(issuesDir, targetIssueDir, templateGuidePath = 'templates/template_pre_verification.md', issuesRelDir = 'docs/issues') {
   const preVerifPath = path.resolve(issuesDir, targetIssueDir, 'pre_verification.md');
   if (!fs.existsSync(preVerifPath)) {
     return {
       decision: 'deny',
-      reason: `[BranchDoRGate Denied] pre_verification.md does not exist in ${targetIssueDir}. Perform and document an Impact & Duplication Check before creating a branch. (Remediation Guidance: Create 'docs/issues/${targetIssueDir}/pre_verification.md' using 'docs/issues/template_pre_verification.md'.)`,
+      reason: `[BranchDoRGate Denied] pre_verification.md does not exist in ${targetIssueDir}. Perform and document an Impact & Duplication Check before creating a branch. (Remediation Guidance: Create '${issuesRelDir}/${targetIssueDir}/pre_verification.md' using '${templateGuidePath}'.)`,
     };
   }
 
   const preVerifContent = fs.readFileSync(preVerifPath, 'utf8');
-  const hasImpactSection = /##\s+(?:\d+\.\s+)?(?:重複・パッチワーク点検|重複・影響調査|Impact\s*(?:&|and)\s*Duplication\s*Check)/i.test(preVerifContent);
+  const hasImpactSection = DEFAULT_SECTION_PATTERNS.impact.test(preVerifContent);
   if (!hasImpactSection) {
     return {
       decision: 'deny',
-      reason: `[BranchDoRGate Denied] Missing 'Impact & Duplication Check' section in ${targetIssueDir}/pre_verification.md. Audit existing codebase, utilities, and past ADRs to prevent duplicated logic or patchwork fixes before creating a branch. (Remediation Guidance: Refer to 'docs/issues/template_pre_verification.md' and document Section 3 '重複・パッチワーク点検'.)`,
+      reason: `[BranchDoRGate Denied] Missing 'Impact & Duplication Check' section in ${targetIssueDir}/pre_verification.md. Audit existing codebase, utilities, and past ADRs to prevent duplicated logic or patchwork fixes before creating a branch. (Remediation Guidance: Refer to '${templateGuidePath}' and document Section 3 '重複・パッチワーク点検'.)`,
     };
   }
 
   // Verify no template placeholders remain
-  const placeholderResult = verifyNoTemplatePlaceholders(preVerifContent, 'pre_verification.md', targetIssueDir);
+  const placeholderResult = verifyNoTemplatePlaceholders(preVerifContent, 'pre_verification.md', targetIssueDir, issuesRelDir);
   if (placeholderResult.decision === 'deny') {
     return placeholderResult;
   }
@@ -242,10 +303,28 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
   const branchName = branchMatch[1];
   const exec = options.execFn || execSync;
   const stateMachine = options.stateMachine || defaultStateMachine;
-  const projectRoot = options.projectRoot || findProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
+  const currentScriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = options.projectRoot || findProjectRoot(currentScriptDir);
+  const pluginRoot = findPluginRoot(currentScriptDir);
+  const config = options.config || loadConfig(projectRoot);
+
+  const issuesDirRel = config.issuesDir || 'docs/issues';
+  const issuesDir = path.resolve(projectRoot, issuesDirRel);
+
+  // Template guide paths for messages
+  let templateIssueGuide = 'templates/template_issue.md';
+  let templatePreVerifGuide = 'templates/template_pre_verification.md';
+  if (pluginRoot && projectRoot) {
+    const relIssue = path.relative(projectRoot, path.resolve(pluginRoot, 'templates/template_issue.md')).replace(/\\/g, '/');
+    const relPreVerif = path.relative(projectRoot, path.resolve(pluginRoot, 'templates/template_pre_verification.md')).replace(/\\/g, '/');
+    if (!relIssue.startsWith('..')) {
+      templateIssueGuide = relIssue;
+      templatePreVerifGuide = relPreVerif;
+    }
+  }
 
   // Step 1: Working tree cleanliness
-  const cleanlinessResult = verifyWorkingTreeCleanliness(exec, projectRoot);
+  const cleanlinessResult = verifyWorkingTreeCleanliness(exec, projectRoot, issuesDirRel);
   if (cleanlinessResult.decision === 'deny') {
     return cleanlinessResult;
   }
@@ -257,41 +336,45 @@ export function handleBranchDoRGate(payload = {}, options = {}) {
   }
 
   // Step 3, 4, 5, 6: Issue specification & DoR documentation check
-  const issueNumMatch = branchName.match(/issue-(\d+)/i);
+  let branchIssueRegex = /(?:issue[/-]|issue-|#|feat\/|feature\/|fix\/)(\d+)/i;
+  if (config.branchIssuePattern && typeof config.branchIssuePattern === 'string') {
+    try {
+      branchIssueRegex = new RegExp(config.branchIssuePattern, 'i');
+    } catch {}
+  }
+  const issueNumMatch = branchName.match(branchIssueRegex);
   if (issueNumMatch) {
     const issueNum = parseInt(issueNumMatch[1], 10);
+    const targetIssueDir = findIssueDir(issuesDir, issueNum);
 
     // Step 3: GitHub Issue existence, open state, and DoR label check
-    const ghIssueResult = verifyGitHubIssueStatus(exec, issueNum, projectRoot);
+    const ghIssueResult = verifyGitHubIssueStatus(
+      exec,
+      issueNum,
+      projectRoot,
+      config.readyLabels,
+      config.issueTracker,
+      Boolean(targetIssueDir)
+    );
     if (ghIssueResult.decision === 'deny') {
       return ghIssueResult;
-    }
-
-    const issuesDir = path.resolve(projectRoot, 'docs/issues');
-    
-    let targetIssueDir = null;
-    if (fs.existsSync(issuesDir)) {
-      const entries = fs.readdirSync(issuesDir);
-      const prefixPadded = `ISSUE-${String(issueNum).padStart(3, '0')}`;
-      const prefixRaw = `ISSUE-${issueNum}`;
-      targetIssueDir = entries.find((e) => e.startsWith(prefixPadded) || e.startsWith(prefixRaw));
     }
 
     if (!targetIssueDir) {
       return {
         decision: 'deny',
-        reason: `[BranchDoRGate Denied] No issue document found for Issue #${issueNum} under docs/issues/. (Remediation Guidance: Create the issue document 'docs/issues/ISSUE-${String(issueNum).padStart(3, '0')}_.../issue.md' using 'docs/issues/template_issue.md' before creating a branch.)`,
+        reason: `[BranchDoRGate Denied] No issue document found for Issue #${issueNum} under ${issuesDirRel}/. (Remediation Guidance: Create the issue document '${issuesDirRel}/ISSUE-${String(issueNum).padStart(3, '0')}_.../issue.md' using '${templateIssueGuide}' before creating a branch.)`,
       };
     }
 
     // Step 4 & 5: Why-First, Risk Elimination, and Placeholder check on issue.md
-    const whyRiskResult = verifyWhyAndRiskSections(issuesDir, targetIssueDir);
+    const whyRiskResult = verifyWhyAndRiskSections(issuesDir, targetIssueDir, templateIssueGuide, issuesDirRel);
     if (whyRiskResult.decision === 'deny') {
       return whyRiskResult;
     }
 
     // Step 6: Impact & Duplication Check and Placeholder check in pre_verification.md
-    const impactResult = verifyImpactDuplicationCheck(issuesDir, targetIssueDir);
+    const impactResult = verifyImpactDuplicationCheck(issuesDir, targetIssueDir, templatePreVerifGuide, issuesDirRel);
     if (impactResult.decision === 'deny') {
       return impactResult;
     }

@@ -31,6 +31,9 @@ Antigravity 公式プラグイン仕様（`plugins/<plugin-name>/plugin.json`）
 4. **単一コマンド実行規約 (`rules/`)**:
    - `single-command.md`: シェルコマンド連結（`;`, `&&`, `|`）を禁止し、セキュリティ監査性と自動承認精度を維持。
 
+5. **柔軟な設定層によるホスト固有ルールの注入 (`config/`)**:
+   - `review-loop.config.json`（または `.agents/review-loop.config.json`）を配置することで、プロジェクト固有の非対話テストコマンド許可リスト（`allowedTestCommands`）、Issue 格納先（`issuesDir`）、DoR ラベル（`readyLabels`）などを自由にカスタマイズ可能。
+
 ---
 
 ## 🚀 導入方法 (Installation)
@@ -65,6 +68,8 @@ git clone https://github.com/yuki-yamagishi/antigravity-review-loop.git .agents/
 .agents/plugins/antigravity-review-loop/
 ├── plugin.json                    # 公式プラグインマニフェスト
 ├── hooks.json                     # ライフサイクルフック定義
+├── config/                        # 設定層ローダー
+│   └── reviewLoopConfig.js
 ├── hooks/                         # フック実装スクリプト
 │   ├── branchDoRGate.js
 │   ├── hookUtils.js
@@ -82,6 +87,9 @@ git clone https://github.com/yuki-yamagishi/antigravity-review-loop.git .agents/
 │   ├── fleet_reviewer.md
 │   ├── fleet_completion_auditor.md
 │   └── fleet_dor_auditor.md
+├── templates/                     # DoR & 事前検証標準テンプレート群
+│   ├── template_issue.md
+│   └── template_pre_verification.md
 └── state/                         # 状態マシン
     ├── loopState.js
     └── .gitignore

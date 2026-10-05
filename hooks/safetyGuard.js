@@ -1,5 +1,5 @@
 /**
- * Safety Guard Hook (.agents/hooks/safetyGuard.js)
+ * Safety Guard Hook (hooks/safetyGuard.js)
  * 
  * Enforces execution safety:
  * 1. Prohibits direct gh pr merge by the agent (merging is exclusively performed by human).
@@ -8,9 +8,11 @@
  *    without explicit positive timeout to prevent process hangs.
  */
 
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { readStdinJson, writeStdoutJson } from './hookUtils.js';
+import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
+import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
  * Validates that gh pr merge is not executed directly by autonomous agents.
@@ -27,15 +29,51 @@ function verifyGhPrMergeProhibited(commandLine) {
 
 /**
  * Validates that interactive watch tests causing process hang are not executed.
+ * Non-interactive flags are only honoured when forwarded to the script after '--'
+ * (before '--', npm interprets them as its own config and the runner never sees them).
  */
-function verifyNonInteractiveTestExecution(commandLine) {
-  if (/\bnpm(?:\.cmd)?\s+(?:run\s+)?test\b/i.test(commandLine) && 
-      !/--run\b/i.test(commandLine) && 
-      !/\btest:(?:run|coverage|fast|related)\b/i.test(commandLine)) {
+function verifyNonInteractiveTestExecution(commandLine, config = {}) {
+  const allowedCommands = Array.isArray(config.allowedTestCommands) ? config.allowedTestCommands : [];
+  if (allowedCommands.some((allowed) => typeof allowed === 'string' && commandLine.trim() === allowed.trim())) {
+    return { decision: 'allow' };
+  }
+
+  if (/\bnpm(?:\.cmd)?\s+(?:run\s+)?test\b/i.test(commandLine)) {
+    const hasForwardedFlag = /\s--\s+(?:\S+\s+)*--(?:run|watch=false|no-watch|watchAll=false|ci)(?=\s|$)/i.test(commandLine);
+    const hasNonInteractiveScript = /\bnpm(?:\.cmd)?\s+run\s+test:(?:run|coverage|fast|related)\b/i.test(commandLine);
+
+    if (hasForwardedFlag || hasNonInteractiveScript) {
+      return { decision: 'allow' };
+    }
+
     return {
       decision: 'deny',
-      reason: "[SafetyGuard Denied] Interactive test runner detected. Use 'npm run test:fast', 'npm run test:related', or 'npm run test:run' for deterministic execution.",
+      reason: "[SafetyGuard Denied] Interactive test runner detected. Forward a non-interactive flag after '--' (e.g. 'npm test -- --run', 'npm test -- --watch=false'), use a dedicated script such as 'npm run test:run', or declare the exact command in 'allowedTestCommands' of review-loop.config.json.",
     };
+  }
+
+  return { decision: 'allow' };
+}
+
+const CONFIG_NAME_PATTERN = /(?:^|[\\/\s"'])(?:\.agents[\\/])?(?:review-loop\.config\.json|\.review-loop\.json)\b/i;
+const WRITE_INDICATOR = />|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|sc|ac|ri|clc|ni|mi|cpi|rni|touch|tee|sed|mv|cp|rm|del|ren|truncate|git\s+(?:checkout|restore|stash|reset|clean))\b/i;
+
+/**
+ * Prevents the agent from loosening guard policy by editing the review-loop config.
+ * Config changes must be made by the human user.
+ */
+function verifyConfigNotTampered(toolName, args, commandLine) {
+  const denyResult = {
+    decision: 'deny',
+    reason: "[SafetyGuard Denied] Modifying review-loop.config.json is prohibited for autonomous agents because it controls safety guards and DoR gates. Ask the user to change it.",
+  };
+  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
+    const target = String(args.TargetFile || '');
+    if (CONFIG_NAME_PATTERN.test(` ${target}`)) return denyResult;
+    return { decision: 'allow' };
+  }
+  if (toolName === 'run_command' && CONFIG_NAME_PATTERN.test(commandLine) && WRITE_INDICATOR.test(commandLine)) {
+    return denyResult;
   }
   return { decision: 'allow' };
 }
@@ -90,22 +128,31 @@ function verifyPowerShellWebTimeoutSpecified(commandLine) {
   return { decision: 'allow' };
 }
 
-export function handleSafetyGuard(payload = {}) {
+export function handleSafetyGuard(payload = {}, options = {}) {
   const toolCall = payload.toolCall || {};
   const toolName = toolCall.name || '';
   const args = toolCall.args || {};
   const commandLine = args.CommandLine || '';
+
+  // Prohibit modifying review-loop configuration via file write tools
+  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
+    return verifyConfigNotTampered(toolName, args, '');
+  }
 
   if (toolName !== 'run_command' || !commandLine) {
     return { decision: 'allow' };
   }
 
   const trimmed = commandLine.trim();
+  const currentScriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = options.projectRoot !== undefined ? options.projectRoot : findProjectRoot(currentScriptDir);
+  const config = options.config || (projectRoot ? loadConfig(projectRoot) : {});
 
   // Safety verification pipeline
   const checks = [
+    () => verifyConfigNotTampered(toolName, args, trimmed),
     () => verifyGhPrMergeProhibited(trimmed),
-    () => verifyNonInteractiveTestExecution(trimmed),
+    () => verifyNonInteractiveTestExecution(trimmed, config),
     () => verifyCurlTimeoutSpecified(trimmed),
     () => verifyPowerShellWebTimeoutSpecified(trimmed),
   ];

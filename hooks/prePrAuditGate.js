@@ -11,13 +11,17 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
+import { readStdinJson, writeStdoutJson, findProjectRoot, findIssueDir } from './hookUtils.js';
+import { loadConfig } from '../config/reviewLoopConfig.js';
 
 /**
- * Step 1: Validates 4-axis documents completeness (issue.md, pre_verification.md, plan.md, walkthrough.md).
+ * Step 1: Validates required axis documents completeness (defaults to issue.md, pre_verification.md, plan.md, walkthrough.md).
  */
-function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir) {
-  const REQUIRED_DOCS = ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'];
+function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir, config = {}) {
+  const REQUIRED_DOCS = Array.isArray(config.requiredAxisDocs) && config.requiredAxisDocs.length > 0
+    ? config.requiredAxisDocs
+    : ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'];
+  const issuesDirRel = config.issuesDir || 'docs/issues';
   const missingDocs = [];
   for (const doc of REQUIRED_DOCS) {
     const docPath = path.resolve(targetPath, doc);
@@ -28,7 +32,7 @@ function verifyFourAxisDocumentsComplete(targetPath, targetIssueDir) {
   if (missingDocs.length > 0) {
     return {
       decision: 'deny',
-      reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: Missing or incomplete 4-axis document(s) in docs/issues/${targetIssueDir}: ${missingDocs.join(', ')}. (Remediation Guidance: Complete all 4 documents before creating a PR.)`,
+      reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: Missing or incomplete 4-axis document(s) in ${issuesDirRel}/${targetIssueDir}: ${missingDocs.join(', ')}. (Remediation Guidance: Complete all required documents [${REQUIRED_DOCS.join(', ')}] before creating a PR.)`,
     };
   }
   return { decision: 'allow' };
@@ -41,14 +45,14 @@ function verifyAcceptanceCriteriaCompleted(targetPath, targetIssueDir) {
   const issueMdContent = fs.readFileSync(path.resolve(targetPath, 'issue.md'), 'utf8');
 
   let prePrSection = issueMdContent;
-  // Match Pre-PR DoD section specifically across both new (5.2 Pre-PR Process DoD) and legacy (5.1 Pre-PR DoD) formats
-  const prePrMatch = issueMdContent.match(/###?\s*(?:5\.[12])?[^\n]*(?:PR作成前|Pre-PR\s*DoD)[^\n]*\n([\s\S]*?)(?=###?\s*(?:5\.[23])?[^\n]*(?:マージ前|Pre-Merge)|\n##\s|$)/i);
+  // Match Pre-PR DoD section specifically across both new and legacy formats, in Japanese or English
+  const prePrMatch = issueMdContent.match(/###?\s*(?:\d+\.\d+)?[^\n]*(?:PR作成前|Pre-PR\s*(?:DoD|Process|Criteria|Acceptance))[^\n]*\n([\s\S]*?)(?=###?\s*(?:\d+\.\d+)?[^\n]*(?:マージ前|Pre-Merge)|\n##\s|$)/i);
   if (prePrMatch) {
     prePrSection = prePrMatch[1];
   } else {
-    // Fallback: If no 5.1/5.2 split, exclude post-PR items like review, merge, CI from blocking
+    // Fallback: If no explicit split, exclude post-PR items like review, merge, CI from blocking
     const lines = issueMdContent.split(/\r?\n/).filter((line) =>
-      !/(?:合議レビュー|レビュー|LGTM|マージ|CI\b|GitHub Actions)/i.test(line)
+      !/(?:合議レビュー|レビュー|LGTM|マージ|CI\b|GitHub Actions|peer\s*review|consensus|re-review|merge\b)/i.test(line)
     );
     prePrSection = lines.join('\n');
   }
@@ -65,11 +69,16 @@ function verifyAcceptanceCriteriaCompleted(targetPath, targetIssueDir) {
 }
 
 /**
- * Step 3: Validates synchronization between SSOT (architecture_overview.md) and latest ADR.
+ * Step 3: Validates synchronization between SSOT and latest ADR.
  */
-function verifySsotAndAdrSynchronized(projectRoot) {
-  const adrDir = path.resolve(projectRoot, 'docs/adr');
-  const ssotPath = path.resolve(projectRoot, 'docs/architecture_overview.md');
+function verifySsotAndAdrSynchronized(projectRoot, config = {}) {
+  const adrDirRel = config.adrDir || 'docs/adr';
+  const ssotFileRel = config.ssotFile;
+  if (!ssotFileRel || typeof ssotFileRel !== 'string') {
+    return { decision: 'allow' };
+  }
+  const adrDir = path.resolve(projectRoot, adrDirRel);
+  const ssotPath = path.resolve(projectRoot, ssotFileRel);
   if (fs.existsSync(adrDir) && fs.existsSync(ssotPath)) {
     const adrFiles = fs.readdirSync(adrDir)
       .filter((f) => /^\d{4}-.*\.md$/.test(f))
@@ -85,7 +94,7 @@ function verifySsotAndAdrSynchronized(projectRoot) {
         if (!hasLatestAdr) {
           return {
             decision: 'deny',
-            reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: The latest ADR (${latestAdrFile}) is not synchronized in docs/architecture_overview.md (SSOT). (Remediation Guidance: Update docs/architecture_overview.md to reference ADR-${latestNum} before creating a PR.)`,
+            reason: `[PrePrAuditGate Denied] Pre-PR Audit Failed: The latest ADR (${latestAdrFile}) is not synchronized in ${ssotFileRel} (SSOT). (Remediation Guidance: Update ${ssotFileRel} to reference ADR-${latestNum} before creating a PR.)`,
           };
         }
       }
@@ -120,24 +129,20 @@ export function handlePrePrAuditGate(payload = {}, options = {}) {
     } catch {}
   }
 
+  const config = options.config || loadConfig(projectRoot);
+  const issuesDirRel = config.issuesDir || 'docs/issues';
+  const issuesDir = path.resolve(projectRoot, issuesDirRel);
+
   const issueNumMatch = currentBranch.match(/issue-(\d+)/i) || trimmed.match(/#(\d+)/);
   if (issueNumMatch) {
     const issueNum = parseInt(issueNumMatch[1], 10);
-    const issuesDir = path.resolve(projectRoot, 'docs/issues');
-
-    let targetIssueDir = null;
-    if (fs.existsSync(issuesDir)) {
-      const entries = fs.readdirSync(issuesDir);
-      const prefixPadded = `ISSUE-${String(issueNum).padStart(3, '0')}`;
-      const prefixRaw = `ISSUE-${issueNum}`;
-      targetIssueDir = entries.find((e) => e.startsWith(prefixPadded) || e.startsWith(prefixRaw));
-    }
+    const targetIssueDir = findIssueDir(issuesDir, issueNum);
 
     if (targetIssueDir) {
       const targetPath = path.resolve(issuesDir, targetIssueDir);
 
       // Step 1: 4-axis documents completeness check
-      const docsResult = verifyFourAxisDocumentsComplete(targetPath, targetIssueDir);
+      const docsResult = verifyFourAxisDocumentsComplete(targetPath, targetIssueDir, config);
       if (docsResult.decision === 'deny') {
         return docsResult;
       }
@@ -151,7 +156,7 @@ export function handlePrePrAuditGate(payload = {}, options = {}) {
   }
 
   // Step 3: SSOT (architecture_overview.md) & latest ADR synchronization check
-  const ssotResult = verifySsotAndAdrSynchronized(projectRoot);
+  const ssotResult = verifySsotAndAdrSynchronized(projectRoot, config);
   if (ssotResult.decision === 'deny') {
     return ssotResult;
   }
