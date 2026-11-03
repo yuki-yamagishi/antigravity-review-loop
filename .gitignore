@@ -4,5 +4,6 @@ dist/
 *.log
 .DS_Store
 state/loop_state.json
+.agents/pr_body.md
 *.tmp
 .tmp*

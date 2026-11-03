@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseReviewResult } from '../skills/review-self-healing/scripts/parseReviewResult.js';
+import {
+  parseReviewResult,
+  sanitizeReviewText,
+  FLUFF_ADVERB_PATTERNS,
+} from '../skills/review-self-healing/scripts/parseReviewResult.js';
 import { STATUS } from '../state/loopState.js';
 
 describe('parseReviewResult', () => {
@@ -313,5 +317,24 @@ And the final review verdict:
         agentType: 'codeReviewer',
       })
     );
+  });
+
+  it('strips filler/emphasis adverbs (根本的に, 明確に, 完全に, 確実に, 鉄壁に, etc.) and trailing ** from review descriptions', () => {
+    expect(FLUFF_ADVERB_PATTERNS.length).toBeGreaterThan(0);
+    expect(
+      sanitizeReviewText('根本的に設計を見直し、明確に境界を分離することで確実に安全性を担保しています。')
+    ).toBe('設計を見直し、境界を分離することで安全性を担保しています。');
+
+    const markdown = `
+# Fleet Code Review
+- **[good] 根本的な原因を排除し、明確に責務が分離され、鉄壁の防御が構築されています。**
+- **[must] 完全に不整合を解消してください。**
+## 総合判定: [要修正]
+`;
+    const result = parseReviewResult(markdown);
+    expect(result.praises[0].description).toBe(
+      '原因を排除し、責務が分離され、防御が構築されています。'
+    );
+    expect(result.issues[0].description).toBe('不整合を解消してください。');
   });
 });

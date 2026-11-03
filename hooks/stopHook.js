@@ -11,6 +11,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { defaultStateMachine } from '../state/loopState.js';
 import { readStdinJson, writeStdoutJson } from './hookUtils.js';
+import { verifyPrBodyNotStale } from './prBodyStaleGuard.js';
 
 export function detectSubagentContext(payload = {}) {
   if (payload.isSubagent === true || payload.subagent === true) return true;
@@ -56,7 +57,7 @@ export function detectActiveSubagents(payload = {}, stateMachine = defaultStateM
   return false;
 }
 
-export function handleStop(payload = {}, stateMachine = defaultStateMachine) {
+export function handleStop(payload = {}, stateMachine = defaultStateMachine, options = {}) {
   const isSubagent = detectSubagentContext(payload);
   const hasActiveSubagents = detectActiveSubagents(payload, stateMachine);
 
@@ -70,6 +71,29 @@ export function handleStop(payload = {}, stateMachine = defaultStateMachine) {
       decision: 'continue',
       reason: check.reason,
     };
+  }
+
+  // PR Body Stale Check: only run on parent agent when not waiting for active subagents
+  // Skip when loop is IDLE or when an isolated test stateMachine is injected without explicit PR options
+  const currentState = stateMachine.getState();
+  const isDefaultMachine = stateMachine === defaultStateMachine;
+  const hasExplicitPrOptions =
+    options.isOpenPr !== undefined ||
+    options.prNumber !== undefined ||
+    options.projectRoot !== undefined ||
+    options.execFn !== undefined;
+
+  if (!isSubagent && !hasActiveSubagents && currentState.status !== 'IDLE' && (isDefaultMachine || hasExplicitPrOptions)) {
+    const staleCheck = verifyPrBodyNotStale({
+      ...options,
+      stateMachine,
+    });
+    if (!staleCheck.allowed) {
+      return {
+        decision: 'continue',
+        reason: staleCheck.reason,
+      };
+    }
   }
 
   return {

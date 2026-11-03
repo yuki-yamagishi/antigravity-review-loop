@@ -131,4 +131,29 @@ describe('Review Loop Config Layer (config/reviewLoopConfig.js)', () => {
     const fallbackConfig = loadConfig(tempDir);
     expect(fallbackConfig.issueTracker).toBe('github');
   });
+
+  it('validates codeDirs, disallowedPrBodyTerms, and autoOverwritePrBody correctly', () => {
+    const rootConfig = path.join(tempDir, 'review-loop.config.json');
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      codeDirs: ['src', 'lib'],
+      disallowedPrBodyTerms: ['取り下げ', '経緯'],
+      autoOverwritePrBody: true,
+    }), 'utf8');
+
+    const config = loadConfig(tempDir);
+    expect(config.codeDirs).toEqual(['src', 'lib']);
+    expect(config.disallowedPrBodyTerms).toEqual(['取り下げ', '経緯']);
+    expect(config.autoOverwritePrBody).toBe(true);
+
+    // Invalid values fall back to defaults
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      codeDirs: 'not-an-array',
+      disallowedPrBodyTerms: 'not-an-array',
+      autoOverwritePrBody: 'not-a-bool',
+    }), 'utf8');
+    const fallbackConfig = loadConfig(tempDir);
+    expect(fallbackConfig.codeDirs).toEqual(DEFAULT_CONFIG.codeDirs);
+    expect(fallbackConfig.disallowedPrBodyTerms).toEqual(DEFAULT_CONFIG.disallowedPrBodyTerms);
+    expect(fallbackConfig.autoOverwritePrBody).toBe(DEFAULT_CONFIG.autoOverwritePrBody);
+  });
 });

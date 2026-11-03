@@ -33,12 +33,13 @@ description: プロジェクトにおける実装・TDD高速反復・4軸ドキ
    - 思考のテンポと開発生産性を極大化するため、軽微な修正のたびに全量テストや重いプロダクションビルドを実行しない。
    - **型チェック・構文検査の局所確認**:
      ```bash
-     # 例: プロジェクトの高速型チェック
+     # 例: プロジェクトの高速型チェック（Windows PowerShell 環境では npx.cmd）
      npx tsc --noEmit
      ```
    - **対象テストファイルのダイレクト非対話実行**:
      ```bash
      # 例: 変更ファイルに関連するテストのみを指定して単発実行（ウォッチモード厳禁）
+     # ※ Windows PowerShell 環境で ExecutionPolicy エラーとなる場合は npm.cmd を使用
      npm test -- <対象テストパス> --run
      # またはプロジェクトの高速テスト用スクリプト（例: test:run, test:fast, test:related 等）
      npm run test:run <対象テストパス>
@@ -53,7 +54,7 @@ description: プロジェクトにおける実装・TDD高速反復・4軸ドキ
    - リモートプッシュ前や PR レビュー時、および CI において、包括的な全量検査を実行し、リポジトリ全体の無破壊を保証する。
    - プロジェクトで定義された品質ゲートコマンドを実行する：
      ```bash
-     # 例: 非対話フラグ付き全量テスト（safetyGuard で確実に許可される標準形式）
+     # 例: 非対話フラグ付き全量テスト（safetyGuard で確実に許可される標準形式。Windows PowerShell では npm.cmd）
      npm test -- --run
      # またはプロジェクトのチェックコマンド（例: npm run check, npm run lint 等）
      npm run check
