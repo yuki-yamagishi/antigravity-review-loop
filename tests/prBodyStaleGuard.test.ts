@@ -238,6 +238,65 @@ describe('PR Body Stale Guard Hook (hooks/prBodyStaleGuard.js)', () => {
     expect(result.reason).toContain('up to date with code commit');
   });
 
+  it('resolves walkthrough.md from branch issue number even when prNumber differs from issueNum (e.g. Issue #7 / PR #8)', () => {
+    testMachine.setPrCreated(8); // PR #8
+
+    const srcDir = path.join(tempDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    // Issue is #7, not #8
+    const issueDir = path.join(tempDir, 'docs', 'issues', 'ISSUE-007_argon_opt');
+    fs.mkdirSync(issueDir, { recursive: true });
+    const walkthroughPath = path.join(issueDir, 'walkthrough.md');
+    fs.writeFileSync(walkthroughPath, '# Walkthrough 7', 'utf8');
+
+    const agentsDir = path.join(tempDir, '.agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentsDir, 'pr_body.md'),
+      '<!-- SYNCED_COMMIT: commit777777 -->\n## 主な変更点\nclean',
+      'utf8'
+    );
+
+    const mockExec = vi.fn().mockImplementation((cmd: string) => {
+      if (cmd.includes('git branch --show-current')) {
+        return 'feature/issue-7-argon-medium-loop-optimization';
+      }
+      if (cmd.includes('git log -1 --format=%ct:%H')) {
+        return '1700000500:commit777777';
+      }
+      if (cmd.includes('walkthrough.md')) {
+        return '1700000550';
+      }
+      return '';
+    });
+
+    const mockFs = {
+      ...fs,
+      statSync: (filePath: string) => {
+        if (String(filePath).includes('walkthrough.md')) {
+          return { mtimeMs: 1700000550 * 1000 };
+        }
+        if (String(filePath).includes('pr_body.md')) {
+          return { mtimeMs: 1700000560 * 1000 };
+        }
+        return fs.statSync(filePath);
+      },
+    };
+
+    const result = verifyPrBodyNotStale({
+      projectRoot: tempDir,
+      stateMachine: testMachine,
+      isOpenPr: true,
+      execFn: mockExec,
+      fs: mockFs,
+      checkRemote: false,
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toContain('PR #8');
+  });
+
   describe('Integration with stopHook (handleStop)', () => {
     it('blocks handleStop with continue if RESOLVED_LGTM is reached but PR Body is stale', () => {
       testMachine.setPrCreated(12);

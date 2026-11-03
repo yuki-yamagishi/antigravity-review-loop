@@ -63,6 +63,25 @@ describe('PR Body Audit Gate Hook (hooks/prBodyAuditGate.js)', () => {
       const result = extractPrBodyFromCommand(cmd, tempDir);
       expect(result).toBeNull();
     });
+
+    it('does not falsely match -B (--base), -f (--fill), or branch suffixes like feat-b / feat-f', () => {
+      const cmd1 = `gh pr create -B main --title "feat: test" --body "## 主な変更点\\n指摘されて勝手に撤回"`;
+      const res1 = extractPrBodyFromCommand(cmd1, tempDir);
+      expect(res1?.type).toBe('body');
+      expect(res1?.content).toContain('指摘されて勝手に撤回');
+
+      const cmd2 = `gh pr create --head feature/sub-b --title "feat: test" --body "## 主な変更点\\n指摘されて撤回"`;
+      const res2 = extractPrBodyFromCommand(cmd2, tempDir);
+      expect(res2?.type).toBe('body');
+      expect(res2?.content).toContain('指摘されて撤回');
+
+      const prBodyPath = path.join(tempDir, 'real_body.md');
+      fs.writeFileSync(prBodyPath, '## 主な変更点\n勝手に実装', 'utf8');
+      const cmd3 = `gh pr create -f --head feature/sub-f -F "${prBodyPath}"`;
+      const res3 = extractPrBodyFromCommand(cmd3, tempDir);
+      expect(res3?.type).toBe('body-file');
+      expect(res3?.content).toContain('勝手に実装');
+    });
   });
 
   describe('extractPrBodySections & findDisallowedTerms', () => {
@@ -88,6 +107,24 @@ Issue の解決。
 
       const reviewTerms = findDisallowedTerms(sections.reviewHistory);
       expect(reviewTerms).toContain('指摘され');
+    });
+
+    it('does not get confused by inline markdown mentions of `## レビュー対応履歴` inside main changes', () => {
+      const text = `## 概要
+概要説明。
+
+## 主な変更点
+- SSoT から恒久仕様（\`## 主な変更点\`）と対応経緯（\`## レビュー対応履歴\`）を分離。
+- 指摘されて勝手に撤回した記述。
+
+## レビュー対応履歴
+| レビュアー | 指摘 | 対応 |
+|---|---|---|
+`;
+      const sections = extractPrBodySections(text);
+      expect(sections.mainChanges).toContain('指摘されて勝手に撤回した記述');
+      expect(sections.reviewHistory).not.toContain('指摘されて勝手に撤回した記述');
+      expect(findDisallowedTerms(sections.mainChanges)).toEqual(expect.arrayContaining(['撤回', '勝手に', '指摘され']));
     });
   });
 

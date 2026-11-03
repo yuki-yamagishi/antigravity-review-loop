@@ -41,8 +41,8 @@ const DEFAULT_DISALLOWED_TERMS = [
 export function extractPrBodyFromCommand(commandLine, projectRoot = process.cwd(), fsModule = fs) {
   if (!commandLine || typeof commandLine !== 'string') return null;
 
-  // 1. Check for --body-file / -F
-  const bodyFileMatch = commandLine.match(/(?:--body-file|-F)(?:\s+|=)(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  // 1. Check for --body-file / -F (case-sensitive for short flag -F vs -f)
+  const bodyFileMatch = commandLine.match(/(?:^|\s)(?:--body-file|-F)(?:\s+|=)(?:"([^"]+)"|'([^']+)'|(\S+))/);
   if (bodyFileMatch) {
     const rawPath = bodyFileMatch[1] || bodyFileMatch[2] || bodyFileMatch[3];
     const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.resolve(projectRoot, rawPath);
@@ -58,18 +58,18 @@ export function extractPrBodyFromCommand(commandLine, projectRoot = process.cwd(
       rawPath,
       resolvedPath,
       content,
-      rawMatch: bodyFileMatch[0],
+      rawMatch: bodyFileMatch[0].trimStart(),
     };
   }
 
-  // 2. Check for --body / -b
-  const bodyMatch = commandLine.match(/(?:--body|-b)(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/i);
+  // 2. Check for --body / -b (case-sensitive for short flag -b vs -B)
+  const bodyMatch = commandLine.match(/(?:^|\s)(?:--body|-b)(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/);
   if (bodyMatch) {
     const content = bodyMatch[1] !== undefined ? bodyMatch[1] : (bodyMatch[2] !== undefined ? bodyMatch[2] : bodyMatch[3]);
     return {
       type: 'body',
       content: content || '',
-      rawMatch: bodyMatch[0],
+      rawMatch: bodyMatch[0].trimStart(),
     };
   }
 
@@ -85,19 +85,19 @@ export function extractPrBodySections(bodyText) {
   }
 
   let mainChanges = '';
-  const mainMatch = bodyText.match(/##\s+(?:\d+\.\s*)?(?:主な変更点|主な改修内容|成果物一覧|実施された改修内容|変更内容|Changes)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|変更ファイル一覧|検証結果)|$)/i);
+  const mainMatch = bodyText.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:主な変更点|主な改修内容|成果物一覧|実施された改修内容|変更内容|Changes)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|変更ファイル一覧|検証結果)|$)/i);
   if (mainMatch) {
     mainChanges = mainMatch[1];
   }
 
   let reviewHistory = '';
-  const reviewMatch = bodyText.match(/##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+  const reviewMatch = bodyText.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
   if (reviewMatch) {
     reviewHistory = reviewMatch[1];
   }
 
   // Text outside review history
-  const nonReviewText = bodyText.replace(/##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴)[^\n]*\n[\s\S]*?(?=\n##\s|$)/i, '');
+  const nonReviewText = bodyText.replace(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴)[^\n]*\n[\s\S]*?(?=\n##\s|$)/i, '');
 
   return {
     mainChanges,

@@ -74,7 +74,16 @@ export function handleStop(payload = {}, stateMachine = defaultStateMachine, opt
   }
 
   // PR Body Stale Check: only run on parent agent when not waiting for active subagents
-  if (!isSubagent && !hasActiveSubagents) {
+  // Skip when loop is IDLE or when an isolated test stateMachine is injected without explicit PR options
+  const currentState = stateMachine.getState();
+  const isDefaultMachine = stateMachine === defaultStateMachine;
+  const hasExplicitPrOptions =
+    options.isOpenPr !== undefined ||
+    options.prNumber !== undefined ||
+    options.projectRoot !== undefined ||
+    options.execFn !== undefined;
+
+  if (!isSubagent && !hasActiveSubagents && currentState.status !== 'IDLE' && (isDefaultMachine || hasExplicitPrOptions)) {
     const staleCheck = verifyPrBodyNotStale({
       ...options,
       stateMachine,

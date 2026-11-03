@@ -25,14 +25,19 @@ Gemini 4 Argon (Medium) 環境における自律開発ループの物理ガー�
 | レビュアー | 指摘内容 (Must/Should) | 対応コミット | 対応概要 |
 |---|---|---|---|
 | `fleet_dor_auditor` | *指摘なし (`READY_TO_BRANCH`: 5観点すべて `[good]` 評価)* | - | Pre-Phase 要件定義・Given-When-Then シナリオ一発合格 |
+| `codeReviewer` | `[must]` `prBodyStaleGuard.js` & `stopHook.js`: PR番号≠Issue番号時の `walkthrough.md` 解決失敗および `IDLE`/テスト時の実環境 `gh pr view` 汚染 | 最新コミット | ブランチ名からの Issue 番号解決を優先し、`IDLE` 時および単体テストの一時 `stateMachine` 注入時はホスト `gh pr view` をスキップ |
+| `codeReviewer` | `[must]` `tsconfig.json`: `allowJs: true` による `npx.cmd tsc --noEmit` の 65 件エラー | 最新コミット | `tests/env.d.ts` にモジュール型定義を整備し、`npx.cmd tsc --noEmit` がエラー 0 件（Exit Code 0）で PASS するよう修正 |
+| `codeReviewer` | `[must]` `prBodyAuditGate.js`: `extractPrBodyFromCommand` の `/i` フラグと先頭境界欠如による `-B` / `-f` 誤マッチ | 最新コミット | 先頭境界 `(?:^|\s)` を必須化し、ショートフラグ `-F` / `-b` の大文字小文字を厳格に区別 |
+| `completionAuditor` | `[must]` `sync-pr-body.js` (`parseWalkthrough`) & `prBodyAuditGate.js` (`extractPrBodySections`) の見出し正規表現における行頭アンカー欠落 | 最新コミット | 各セクション見出し正規表現に `(?:^|\n)` アンカーを付与し、インライン記述への誤マッチによる PR Body 重複破損を解消 |
 
 ## 4. 検証結果
 
-- `npm.cmd test -- --run`: 全 11 テストファイル、**191 件のテストが 100% PASS**。
+- `npx.cmd tsc --noEmit`: **エラー 0 件（Exit Code 0）で PASS**。
+- `npm.cmd test -- --run`: 全 11 テストファイル、**195 件のテストが 100% PASS**。
   - `tests/hooks.test.ts` (83 tests PASS): `write_file`/`edit_file` 設定改ざん拒絶、クォート外 `;`/`&&`/`||`/`|` 拒絶、クォート内記号および `2>&1` 許可を含む。
-  - `tests/prBodyAuditGate.test.ts` (10 tests PASS)
-  - `tests/prBodyStaleGuard.test.ts` (8 tests PASS)
-  - `tests/syncPrBody.test.ts` (10 tests PASS)
+  - `tests/prBodyAuditGate.test.ts` (12 tests PASS): `-B`/`-f` フラグ識別およびインライン見出し記述時のセクション分離テストを含む。
+  - `tests/prBodyStaleGuard.test.ts` (9 tests PASS): PR番号≠Issue番号（Issue #7 / PR #8）時の `walkthrough.md` 解決テストを含む。
+  - `tests/syncPrBody.test.ts` (11 tests PASS): インライン見出し記述を含む `walkthrough.md` の境界分離テストを含む。
   - `tests/config.test.ts` (9 tests PASS)
   - `tests/e2eLoop.test.ts` (2 tests PASS)
   - その他既存テストスイート全件 PASS。

@@ -213,13 +213,21 @@ export function verifyPrBodyNotStale(options = {}) {
   }
 
   // 3. Retrieve walkthrough.md timestamp
-  const issueNum = options.issueNum || prNumber;
-  const walkthroughPath = resolveWalkthroughPath({
+  let walkthroughPath = resolveWalkthroughPath({
     ...options,
     projectRoot,
     fs: fsModule,
-    issueNum,
+    issueNum: options.issueNum,
   });
+
+  if (!walkthroughPath && !options.issueNum && prNumber) {
+    walkthroughPath = resolveWalkthroughPath({
+      ...options,
+      projectRoot,
+      fs: fsModule,
+      issueNum: prNumber,
+    });
+  }
 
   if (!walkthroughPath || !fsModule.existsSync(walkthroughPath)) {
     return {

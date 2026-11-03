@@ -86,6 +86,28 @@ describe('Deterministic PR Body Synchronizer (scripts/sync-pr-body.js)', () => {
       expect(parsed.reviewHistory).toContain('| レビュアー | 指摘内容 (Must/Should) | 対応コミット | 対応概要 |');
       expect(parsed.reviewHistory).toContain('初回PR作成');
     });
+
+    it('does not misidentify inline mentions of `## 主な変更点` or `## レビュー対応履歴` as section headers', () => {
+      const walkthroughWithInlineMentions = `# Walkthrough
+
+## 1. 概要
+概要。
+
+## 2. 主な変更点
+1. \`walkthrough.md\` から恒久仕様（\`## 主な変更点\`）と対応経緯（\`## レビュー対応履歴\`）を厳格に境界分離。
+2. 追加のガード実装。
+
+## 3. レビュー対応履歴
+| レビュアー | 指摘内容 (Must/Should) | 対応コミット | 対応概要 |
+|---|---|---|---|
+| fleet_dor_auditor | 指摘なし | - | 一発合格 |
+`;
+      const parsed = parseWalkthrough(walkthroughWithInlineMentions);
+      expect(parsed.mainChanges).toContain('追加のガード実装');
+      expect(parsed.reviewHistory).toContain('fleet_dor_auditor');
+      expect(parsed.reviewHistory).not.toContain('追加のガード実装');
+      expect(parsed.reviewHistory).not.toContain('## 3. レビュー対応履歴');
+    });
   });
 
   describe('resolveWalkthroughPath', () => {

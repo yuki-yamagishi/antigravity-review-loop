@@ -88,19 +88,19 @@ export function parseWalkthrough(content, disallowedTerms = DISALLOWED_TERMS_DEF
 
   // 2. Overview section (## 概要, ## 1. 概要, ## Overview)
   let overview = '';
-  const overviewMatch = content.match(/##\s+(?:\d+\.\s*)?(?:概要|Overview)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+  const overviewMatch = content.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:概要|Overview)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
   if (overviewMatch) {
     overview = overviewMatch[1].trim();
   }
 
   // 3. Main Changes section (## 成果物一覧, ## 実施された改修内容, ## 主な変更点, ## 改修内容, ## Changes)
   let mainChanges = '';
-  const mainChangesMatch = content.match(/##\s+(?:\d+\.\s*)?(?:成果物一覧|実施された改修内容|主な変更点|主な改修内容|改修内容|変更内容|Changes)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|検証結果|Verification)|$)/i);
+  const mainChangesMatch = content.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:成果物一覧|実施された改修内容|主な変更点|主な改修内容|改修内容|変更内容|Changes)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|検証結果|Verification)|$)/i);
   if (mainChangesMatch) {
     mainChanges = sanitizeMainChanges(mainChangesMatch[1].trim(), disallowedTerms);
   } else {
     // Fallback: look for section 2 or whatever follows overview
-    const genericMatch = content.match(/##\s+(?:\d+\.\s*)?[^\n]+\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|検証結果|Verification)|$)/i);
+    const genericMatch = content.match(/(?:^|\n)##\s+(?:\d+\.\s*)?[^\n]+\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|検証結果|Verification)|$)/i);
     if (genericMatch && genericMatch[1] !== overview) {
       mainChanges = sanitizeMainChanges(genericMatch[1].trim(), disallowedTerms);
     }
@@ -108,7 +108,7 @@ export function parseWalkthrough(content, disallowedTerms = DISALLOWED_TERMS_DEF
 
   // 4. Review History section (## レビュー対応履歴, ## レビュー指摘対応, ## 指摘対応, ## 修正履歴, ## 対応履歴)
   let reviewHistory = '';
-  const reviewMatch = content.match(/##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|Review\s*History)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:検証結果|Verification)|$)/i);
+  const reviewMatch = content.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:レビュー対応履歴|レビュー指摘対応|指摘対応|修正履歴|対応履歴|Review\s*History)[^\n]*\n([\s\S]*?)(?=\n##\s+(?:\d+\.\s*)?(?:検証結果|Verification)|$)/i);
   if (reviewMatch) {
     reviewHistory = reviewMatch[1].trim();
   }
@@ -124,7 +124,7 @@ export function parseWalkthrough(content, disallowedTerms = DISALLOWED_TERMS_DEF
 
   // 5. Verification Results section (## 検証結果, ## 3. 検証結果, ## Verification)
   let verification = '';
-  const verificationMatch = content.match(/##\s+(?:\d+\.\s*)?(?:検証結果|テスト結果|Verification\s*Results?)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+  const verificationMatch = content.match(/(?:^|\n)##\s+(?:\d+\.\s*)?(?:検証結果|テスト結果|Verification\s*Results?)[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
   if (verificationMatch) {
     verification = verificationMatch[1].trim();
   }
