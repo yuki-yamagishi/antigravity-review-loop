@@ -10,6 +10,38 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { recordReview, setReviewResult, STATUS } from '../../../state/loopState.js';
 
+export const FLUFF_ADVERB_PATTERNS = [
+  /根本的(?:に|な)/g,
+  /明確(?:に|な)/g,
+  /完全(?:に|な)/g,
+  /確実(?:に|な)/g,
+  /徹底的(?:に|な)/g,
+  /抜本的(?:に|な)/g,
+  /劇的(?:に|な)/g,
+  /飛躍的(?:に|な)/g,
+  /完璧(?:に|な)/g,
+  /美しく|美しい/g,
+  /鉄壁(?:の|に|な)?/g,
+  /堂々と/g,
+  /極めて/g,
+  /見事に/g,
+];
+
+/**
+ * Strips hyperbolic fluff / filler adverbs from review text or item descriptions.
+ */
+export function sanitizeReviewText(text) {
+  if (typeof text !== 'string' || !text) return '';
+  let cleaned = text;
+  for (const pattern of FLUFF_ADVERB_PATTERNS) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+  return cleaned
+    .replace(/([、。])\s*\1+/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 export function parseReviewResult(reviewText, options = {}) {
   if (typeof reviewText !== 'string') {
     reviewText = '';
@@ -77,7 +109,7 @@ export function parseReviewResult(reviewText, options = {}) {
       continue;
     }
 
-    const isLegendDefinition = /^[-*]\s*(?:\*\*)?`?\[(must|should|imo|nits|ask|good)\]`?(?:\*\*)?[:\s]*(?:マージ前に修正必須|強く推奨|私見・提案|些細な指摘|質問・確認|称賛・好ましい実装|修正必須|推奨)(?:[（(].*[）)])?\s*$/i.test(line);
+    const isLegendDefinition = /^[-*]\s*(?:\*\*)?`?\[(must|should|imo|nits|ask|good)\]`?(?:\*\*)?[:\s]*(?:マージ前に修正必須|強く推奨|修正推奨|私見・提案|提案|些細な指摘|質問・確認|称賛・好ましい実装|妥当な実装の評価|妥当な達成点の評価|妥当な要件定義の評価|修正必須|推奨)(?:[（(].*[）)])?\s*$/i.test(line);
     if (isLegendDefinition) {
       continue;
     }
@@ -86,7 +118,7 @@ export function parseReviewResult(reviewText, options = {}) {
     if (!match) continue;
 
     const rawType = match[1].toLowerCase();
-    const description = match[2].trim();
+    const description = sanitizeReviewText(match[2].replace(/\*\*+$/g, '').trim());
 
     if (rawType === 'good') {
       praises.push({
@@ -121,7 +153,8 @@ export function parseReviewResult(reviewText, options = {}) {
   if (issues.length === 0 && Array.isArray(jsonIssues) && jsonIssues.length > 0) {
     for (const jIssue of jsonIssues) {
       const rawType = (jIssue.severity || jIssue.type || 'must').toLowerCase();
-      const desc = jIssue.description || jIssue.title || 'Review issue';
+      const rawDesc = typeof jIssue === 'string' ? jIssue : (jIssue.description || jIssue.title || 'Review issue');
+      const desc = sanitizeReviewText(rawDesc);
       issues.push({
         id: `issue-${issues.length + 1}`,
         type: rawType,

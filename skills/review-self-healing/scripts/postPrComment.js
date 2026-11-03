@@ -11,6 +11,7 @@ import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { sanitizeReviewText } from './parseReviewResult.js';
 
 export function postPrComment(prNumber, commentBody, options = {}) {
   const num = Number(prNumber);
@@ -22,6 +23,8 @@ export function postPrComment(prNumber, commentBody, options = {}) {
     throw new Error('Comment body cannot be empty.');
   }
 
+  const sanitizedBody = options.sanitize === false ? commentBody : sanitizeReviewText(commentBody);
+
   const tmpDir = options.tmpDir || os.tmpdir();
   const randomSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   const tempFilePath = path.join(tmpDir, `pr_comment_${num}_${randomSuffix}.md`);
@@ -29,7 +32,7 @@ export function postPrComment(prNumber, commentBody, options = {}) {
   const exec = options.execFn || execFileSync;
 
   try {
-    fs.writeFileSync(tempFilePath, commentBody, 'utf8');
+    fs.writeFileSync(tempFilePath, sanitizedBody, 'utf8');
 
     const stdout = exec('gh', ['pr', 'comment', String(num), '--body-file', tempFilePath], {
       encoding: 'utf8',

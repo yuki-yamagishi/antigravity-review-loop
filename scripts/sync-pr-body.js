@@ -45,7 +45,10 @@ export function sanitizeMainChanges(text, disallowedTerms = DISALLOWED_TERMS_DEF
   const escapedTerms = disallowedTerms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const disallowedRegex = new RegExp(`(?:${escapedTerms.join('|')})`, 'i');
 
-  for (const line of lines) {
+  const fluffRegex = /(?:根本的(?:に|な)|明確(?:に|な)|完全(?:に|な)|確実(?:に|な)|徹底的(?:に|な)|抜本的(?:に|な)|劇的(?:に|な)|飛躍的(?:に|な)|完璧(?:に|な)|美しく|美しい|鉄壁(?:の|に|な)?|堂々と|極めて|非常に|見事に)/g;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(fluffRegex, '');
     if (disallowedRegex.test(line)) {
       // Clean up trial-and-error phrases, converting them to clean architectural notes or skipping purely conversational lines
       const cleaned = line

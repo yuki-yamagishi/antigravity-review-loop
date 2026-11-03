@@ -57,10 +57,10 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
 3. **Reactive Wakeup 待機**:
    - 親エージェントはツール呼び出しを行わずにターンを終了し、両 Fleet の完了通知を待ちます。
 4. **各レビュー結果の PR コメント投稿 & loopState 記録**:
-   - 一時ファイル経由で PR スレッドに公式コメントとして投稿：
+   - `postPrComment.js` 経由で PR スレッドに公式コメントとして投稿（不要な強調語・誇大表現は自動サニタイズされます）：
      ```bash
-     gh pr comment <PR番号> --body-file <コードレビューファイル>
-     gh pr comment <PR番号> --body-file <完了性監査ファイル>
+     node <プラグインパス>/skills/review-self-healing/scripts/postPrComment.js <PR番号> <コードレビューファイル>
+     node <プラグインパス>/skills/review-self-healing/scripts/postPrComment.js <PR番号> <完了性監査ファイル>
      ```
    - それぞれの結果をステートマシンに記録：
      ```bash

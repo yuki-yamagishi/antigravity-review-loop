@@ -37,6 +37,8 @@ declare module '*/state/loopState.js' {
 }
 
 declare module '*/skills/review-self-healing/scripts/parseReviewResult.js' {
+  export const FLUFF_ADVERB_PATTERNS: readonly RegExp[];
+  export function sanitizeReviewText(text: string): string;
   export interface ParseReviewResultOptions {
     updateState?: boolean;
     agentType?: string | null;
