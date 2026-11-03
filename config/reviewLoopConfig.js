@@ -24,6 +24,22 @@ const DEFAULTS = {
   requiredAxisDocs: ['issue.md', 'pre_verification.md', 'plan.md', 'walkthrough.md'],
   issueTracker: 'github',
   branchIssuePattern: '',
+  codeDirs: ['src', 'frontend/src', 'lib', 'hooks', 'state', 'skills', 'config', 'scripts'],
+  disallowedPrBodyTerms: [
+    '撤回',
+    '取りやめ',
+    '取り下げ',
+    '勝手に',
+    '指摘され',
+    '指摘を受け',
+    '指摘により',
+    '自作自演',
+    '言い訳',
+    'やっぱり',
+    '戻した',
+    'やめました',
+  ],
+  autoOverwritePrBody: false,
 };
 
 function cloneDefaults() {
@@ -32,6 +48,8 @@ function cloneDefaults() {
     allowedTestCommands: [...DEFAULTS.allowedTestCommands],
     readyLabels: [...DEFAULTS.readyLabels],
     requiredAxisDocs: [...DEFAULTS.requiredAxisDocs],
+    codeDirs: [...DEFAULTS.codeDirs],
+    disallowedPrBodyTerms: [...DEFAULTS.disallowedPrBodyTerms],
   };
 }
 
@@ -96,8 +114,9 @@ export function mergeConfig(parsed) {
       continue;
     }
     let valid = false;
-    if (key === 'allowedTestCommands') valid = isStringArray(value, { allowEmpty: true });
+    if (key === 'allowedTestCommands' || key === 'codeDirs' || key === 'disallowedPrBodyTerms') valid = isStringArray(value, { allowEmpty: true });
     else if (key === 'readyLabels' || key === 'requiredAxisDocs') valid = isStringArray(value, { allowEmpty: false });
+    else if (key === 'autoOverwritePrBody') valid = typeof value === 'boolean';
     else if (key === 'issueTracker') valid = typeof value === 'string' && ['auto', 'github', 'local', 'none'].includes(value.toLowerCase().trim());
     else if (key === 'branchIssuePattern') valid = typeof value === 'string';
     else if (key === 'ssotFile' && (value === '' || value === null)) valid = true;
@@ -105,6 +124,7 @@ export function mergeConfig(parsed) {
     if (valid) {
       if (key === 'issueTracker') config[key] = value.toLowerCase().trim();
       else if (key === 'ssotFile' && (value === '' || value === null)) config[key] = '';
+      else if (key === 'autoOverwritePrBody') config[key] = Boolean(value);
       else config[key] = Array.isArray(value) ? [...value] : value;
     } else {
       warn(`invalid value for "${key}"; using default.`);

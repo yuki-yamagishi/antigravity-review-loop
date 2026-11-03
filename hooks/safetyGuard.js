@@ -48,12 +48,20 @@ function verifyNonInteractiveTestExecution(commandLine, config = {}) {
 
     return {
       decision: 'deny',
-      reason: "[SafetyGuard Denied] Interactive test runner detected. Forward a non-interactive flag after '--' (e.g. 'npm test -- --run', 'npm test -- --watch=false'), use a dedicated script such as 'npm run test:run', or declare the exact command in 'allowedTestCommands' of review-loop.config.json.",
+      reason: "[SafetyGuard Denied] Interactive test runner detected. Forward a non-interactive flag after '--' (e.g. 'npm test -- --run' or 'npm.cmd test -- --run' on Windows PowerShell, 'npm test -- --watch=false'), use a dedicated script such as 'npm run test:run', or declare the exact command in 'allowedTestCommands' of review-loop.config.json.",
     };
   }
 
   return { decision: 'allow' };
 }
+
+const FILE_EDIT_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'write_to_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+]);
 
 const CONFIG_NAME_PATTERN = /(?:^|[\\/\s"'])(?:\.agents[\\/])?(?:review-loop\.config\.json|\.review-loop\.json)\b/i;
 const WRITE_INDICATOR = />|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|sc|ac|ri|clc|ni|mi|cpi|rni|touch|tee|sed|mv|cp|rm|del|ren|truncate|git\s+(?:checkout|restore|stash|reset|clean))\b/i;
@@ -67,14 +75,80 @@ function verifyConfigNotTampered(toolName, args, commandLine) {
     decision: 'deny',
     reason: "[SafetyGuard Denied] Modifying review-loop.config.json is prohibited for autonomous agents because it controls safety guards and DoR gates. Ask the user to change it.",
   };
-  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
-    const target = String(args.TargetFile || '');
+  if (FILE_EDIT_TOOLS.has(toolName)) {
+    const target = String(args.Path || args.TargetFile || '');
     if (CONFIG_NAME_PATTERN.test(` ${target}`)) return denyResult;
     return { decision: 'allow' };
   }
   if (toolName === 'run_command' && CONFIG_NAME_PATTERN.test(commandLine) && WRITE_INDICATOR.test(commandLine)) {
     return denyResult;
   }
+  return { decision: 'allow' };
+}
+
+/**
+ * Validates that a shell command does not chain multiple commands using ';', '&&', '||', or '|'
+ * outside of single or double quotes.
+ */
+export function verifySingleCommandExecution(commandLine) {
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < commandLine.length; i++) {
+    const ch = commandLine[i];
+
+    // Handle backslash / backtick escapes inside double quotes or unquoted text
+    if ((ch === '\\' || ch === '`') && !inSingle) {
+      i++;
+      continue;
+    }
+
+    if (ch === "'" && !inDouble) {
+      // PowerShell / SQL escaped single quote ('') inside single-quoted string
+      if (inSingle && commandLine[i + 1] === "'") {
+        i++;
+        continue;
+      }
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (ch === '"' && !inSingle) {
+      if (inDouble && commandLine[i + 1] === '"') {
+        i++;
+        continue;
+      }
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (inSingle || inDouble) {
+      continue;
+    }
+
+    if (ch === ';') {
+      return {
+        decision: 'deny',
+        reason: "[SafetyGuard Denied] Multiple chained commands detected (';'). Execute one single command per 'run_command' call without chaining via ';', '&&', '||', or '|'.",
+      };
+    }
+
+    if (ch === '&' && commandLine[i + 1] === '&') {
+      return {
+        decision: 'deny',
+        reason: "[SafetyGuard Denied] Multiple chained commands detected ('&&'). Execute one single command per 'run_command' call without chaining via ';', '&&', '||', or '|'.",
+      };
+    }
+
+    if (ch === '|') {
+      const op = commandLine[i + 1] === '|' ? '||' : '|';
+      return {
+        decision: 'deny',
+        reason: `[SafetyGuard Denied] Multiple chained commands detected ('${op}'). Execute one single command per 'run_command' call without chaining via ';', '&&', '||', or '|'.`,
+      };
+    }
+  }
+
   return { decision: 'allow' };
 }
 
@@ -135,7 +209,7 @@ export function handleSafetyGuard(payload = {}, options = {}) {
   const commandLine = args.CommandLine || '';
 
   // Prohibit modifying review-loop configuration via file write tools
-  if (toolName === 'write_to_file' || toolName === 'replace_file_content' || toolName === 'multi_replace_file_content') {
+  if (FILE_EDIT_TOOLS.has(toolName)) {
     return verifyConfigNotTampered(toolName, args, '');
   }
 
@@ -152,6 +226,7 @@ export function handleSafetyGuard(payload = {}, options = {}) {
   const checks = [
     () => verifyConfigNotTampered(toolName, args, trimmed),
     () => verifyGhPrMergeProhibited(trimmed),
+    () => verifySingleCommandExecution(trimmed),
     () => verifyNonInteractiveTestExecution(trimmed, config),
     () => verifyCurlTimeoutSpecified(trimmed),
     () => verifyPowerShellWebTimeoutSpecified(trimmed),

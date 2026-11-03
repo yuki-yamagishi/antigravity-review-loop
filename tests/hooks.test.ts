@@ -15,6 +15,8 @@ import {
 } from '../hooks/branchDoRGate.js';
 import { handlePrePrAuditGate } from '../hooks/prePrAuditGate.js';
 import { handlePostPrCreate } from '../hooks/postPrCreate.js';
+import { handlePrBodyAuditGate } from '../hooks/prBodyAuditGate.js';
+import { handlePrBodyStaleStop } from '../hooks/prBodyStaleGuard.js';
 
 describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
   let tempDir: string;
@@ -349,8 +351,13 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
     });
 
     it('denies autonomous agent tampering with review-loop configuration', () => {
-      // Direct file editing tools
+      // Direct file editing tools (including current write_file / edit_file and legacy tools)
       const fileToolCalls = [
+        { name: 'write_file', args: { Path: 'review-loop.config.json' } },
+        { name: 'write_file', args: { Path: 'c:/repo/.agents/review-loop.config.json' } },
+        { name: 'write_file', args: { Path: '.review-loop.json' } },
+        { name: 'edit_file', args: { Path: 'review-loop.config.json' } },
+        { name: 'edit_file', args: { Path: '.agents/review-loop.config.json' } },
         { name: 'write_to_file', args: { TargetFile: 'review-loop.config.json' } },
         { name: 'write_to_file', args: { TargetFile: 'c:/repo/.agents/review-loop.config.json' } },
         { name: 'write_to_file', args: { TargetFile: '.review-loop.json' } },
@@ -364,13 +371,15 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       }
 
       // Safe file editing should be allowed
-      const safeFileResult = handleSafetyGuard({
-        toolCall: {
-          name: 'write_to_file',
-          args: { TargetFile: 'docs/issues/ISSUE-001/plan.md' },
-        },
-      });
-      expect(safeFileResult.decision).toBe('allow');
+      const safeFileTools = [
+        { name: 'write_file', args: { Path: 'docs/issues/ISSUE-001/plan.md' } },
+        { name: 'edit_file', args: { Path: 'hooks/safetyGuard.js' } },
+        { name: 'write_to_file', args: { TargetFile: 'docs/issues/ISSUE-001/plan.md' } },
+      ];
+      for (const stc of safeFileTools) {
+        const safeFileResult = handleSafetyGuard({ toolCall: stc });
+        expect(safeFileResult.decision).toBe('allow');
+      }
 
       // Command-line tampering (including PowerShell aliases)
       const tamperingCommands = [
@@ -585,6 +594,47 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       ];
 
       for (const cmd of unrelatedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('allow');
+      }
+    });
+
+    it('denies chained shell commands (;, &&, ||, |) outside of quotes', () => {
+      const chainedCommands = [
+        'git status ; git branch',
+        'git add . && git commit -m "feat: add guard"',
+        'npm.cmd test -- --run || echo "failed"',
+        'Get-ChildItem | Select-Object Name',
+        'cat file.txt | grep pattern',
+      ];
+
+      for (const cmd of chainedCommands) {
+        const result = handleSafetyGuard({
+          toolCall: {
+            name: 'run_command',
+            args: { CommandLine: cmd },
+          },
+        });
+        expect(result.decision).toBe('deny');
+        expect(result.reason).toContain('Multiple chained commands');
+      }
+    });
+
+    it('allows single commands that contain ;, &&, ||, or | inside quotes or fd redirects', () => {
+      const validSingleCommands = [
+        'git commit -m "fix: handle ; and && and || and | in messages"',
+        "git commit -m 'chore: a; b | c && d'",
+        'node -e "console.log(1 && 2 || 3); process.exit(0)"',
+        'gh issue create --title "feat: a | b" --body "step 1; step 2 && step 3"',
+        'node state/loopState.js status 2>&1',
+      ];
+
+      for (const cmd of validSingleCommands) {
         const result = handleSafetyGuard({
           toolCall: {
             name: 'run_command',
@@ -2017,5 +2067,54 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       expect(parsed).toEqual({});
     });
   });
+
+  describe('prBodyAuditGate (antigravity-review-loop/hooks/prBodyAuditGate.js)', () => {
+    it('executes directly via node CLI with stdin/stdout JSON protocol', () => {
+      const handlerPath = path.resolve(__dirname, '../hooks/prBodyAuditGate.js');
+      const inputPayload = JSON.stringify({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'gh pr create --title "clean" --body "## 概要\\nclean\\n## 主な変更点\\nspec"' },
+        },
+      });
+      const stdout = execSync(`node "${handlerPath}"`, {
+        input: inputPayload,
+        encoding: 'utf8',
+      });
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.decision).toBe('allow');
+    });
+
+    it('denies gh pr create via node CLI when conversation terms are detected', () => {
+      const handlerPath = path.resolve(__dirname, '../hooks/prBodyAuditGate.js');
+      const inputPayload = JSON.stringify({
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: 'gh pr create --title "leak" --body "## 主な変更点\\n指摘されて撤回"' },
+        },
+      });
+      const stdout = execSync(`node "${handlerPath}"`, {
+        input: inputPayload,
+        encoding: 'utf8',
+      });
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.decision).toBe('deny');
+      expect(parsed.reason).toContain('PrBodyAuditGate Denied');
+    });
+  });
+
+  describe('prBodyStaleGuard (antigravity-review-loop/hooks/prBodyStaleGuard.js)', () => {
+    it('executes directly via node CLI with stdin/stdout JSON protocol', () => {
+      const handlerPath = path.resolve(__dirname, '../hooks/prBodyStaleGuard.js');
+      const inputPayload = JSON.stringify({});
+      const stdout = execSync(`node "${handlerPath}"`, {
+        input: inputPayload,
+        encoding: 'utf8',
+      });
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.decision).toBeDefined();
+    });
+  });
 });
+
 

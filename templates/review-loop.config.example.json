@@ -12,5 +12,30 @@
   "adrDir": "docs/adr",
   "ssotFile": "docs/architecture_overview.md",
   "issueTracker": "auto",
-  "branchIssuePattern": "(?:issue[/-]|issue-|#|feat/|feature/|fix/)(\\d+)"
+  "branchIssuePattern": "(?:issue[/-]|issue-|#|feat/|feature/|fix/)(\\d+)",
+  "codeDirs": [
+    "src",
+    "frontend/src",
+    "lib",
+    "hooks",
+    "state",
+    "skills",
+    "config",
+    "scripts"
+  ],
+  "disallowedPrBodyTerms": [
+    "撤回",
+    "取りやめ",
+    "取り下げ",
+    "勝手に",
+    "指摘され",
+    "指摘を受け",
+    "指摘により",
+    "自作自演",
+    "言い訳",
+    "やっぱり",
+    "戻した",
+    "やめました"
+  ],
+  "autoOverwritePrBody": false
 }

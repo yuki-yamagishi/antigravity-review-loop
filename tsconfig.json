@@ -6,12 +6,16 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "checkJs": false
   },
   "include": [
     "hooks/**/*.js",
     "skills/**/*.js",
     "state/**/*.js",
+    "scripts/**/*.js",
+    "config/**/*.js",
     "tests/**/*.ts"
   ]
 }

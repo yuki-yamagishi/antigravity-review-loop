@@ -17,13 +17,20 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    - **Pre-PR DoD（PR作成前受け入れ基準）の完全達成**: `issue.md` 内の「5.2. PR作成前プロセス完了基準 (Pre-PR Process DoD)」（旧フォーマットでは 5.1）に未チェック項目（`- [ ]`）が残っていないこと（すべて `[x]` に更新済であること）。
    - **SSOT と ADR の同期 (運用されている場合)**: プロジェクトで `docs/adr/` および `docs/architecture_overview.md` を運用している場合、最新 ADR が `docs/architecture_overview.md`（SSOT）に登録・反映されていること。
 
-2. **PR 作成**:
-   ```bash
-   gh pr create --title "<タイトル>" --body-file <一時ファイル>
-   ```
-   - PR 本文には `Closes #<Issue番号>` を必ず含める。
+2. **PR 作成 (SSoT からの決定論的一発生成)**:
+   - 正本である `walkthrough.md` と Git 実差分からクリーンな PR Body を生成します：
+     ```bash
+     node <プラグインパス>/scripts/sync-pr-body.js
+     ```
+   - 生成されたクリーンな PR Body（`.agents/pr_body.md`）を用いて PR を作成：
+     ```bash
+     gh pr create --title "<タイトル>" --body-file .agents/pr_body.md
+     ```
+   - PR 本文には `Closes #<Issue番号>` が自動で含まれます。
+   - **★【物理制約】PR Body 静的監査・自動差し替え (`prBodyAuditGate.js`)**:
+     `gh pr create` / `gh pr edit` 実行時、PR Body の「## 主な変更点」に会話引きずりパターン（「撤回」「勝手に」「指摘され」「自作自演」等の経緯語）が含まれている場合は `PreToolUse` により物理拒絶されます。経緯語は「## レビュー対応履歴」にのみ記載可能です。
    - `postPrCreate.js` が PR 作成を自動検知し、`loopState.js` の状態が `PR_CREATED` に遷移します。
-   - この時点で Stop フック（`stopHook.js`）による早期停止ガードが有効になります。
+   - この時点で Stop フック（`stopHook.js` / `prBodyStaleGuard.js`）による早期停止ガードが有効になります。
 
 3. **★【必須】リモート CI (GitHub Actions) の待機 & 監視**:
    PR 作成直後、Fleet レビューに進む前に、GitHub Actions CI が正常にパスすることを確認します：
@@ -71,8 +78,14 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    - **片方のみ完了時**: もう片方の完了を待つため、`STATUS.REVIEW_REQUESTED` に留まり、Stop フックにより停止はブロックされます。
 2. **手元自己修復コミット**:
    - 両レビュアーからの指摘事項（コード品質および完了性・Why/リスク）を修正し、テストを追加。
-   - プロジェクトのテスト・品質ゲート（例: `npm test -- --run` やプロジェクト定義のチェックコマンド）で 100% PASS を確認後、追加コミット＆プッシュ。
+   - プロジェクトのテスト・品質ゲート（例: `npm test -- --run` や Windows PowerShell 環境での `npm.cmd test -- --run`、またはプロジェクト定義のチェックコマンド）で 100% PASS を確認後、追加コミット＆プッシュ。
    - GitHub Actions CI がパスするまで待機（`gh pr checks`）。
+   - **成果物レポートの更新 & PR Body 即時同期**:
+     `walkthrough.md` に対応内容とレビュー対応履歴テーブルを反映し、PR Body を同期します：
+     ```bash
+     node <プラグインパス>/scripts/sync-pr-body.js --update-pr
+     ```
+     ※ 最新のコードコミットに対して `walkthrough.md` または PR Body が未同期の場合、Stop フック（`prBodyStaleGuard.js`）により作業終了が**物理的にブロック**されます。
 3. **公式修正報告の投稿 & 再レビュー待機遷移**:
    ```bash
    node <プラグインパス>/skills/review-self-healing/scripts/resolveReview.js --commit <コミットハッシュ> --summary "<修正概要>"
@@ -81,7 +94,7 @@ description: Pull Request 作成、GitHub Actions CI 監視、Fleet レビュー
    - **【最重要】コード修正が入ったため過去の全レビュー判定は Stale（無効化）され、`reviews` スロットは両者ともリセットされます。親エージェントによる自己承認（セルフLGTM）および片方の承認のみでの通過は物理的に禁止されています。**
 4. **★【必須】Fleet サブエージェント 2 者の再起動（Re-review & Re-audit）**:
    - コード変更が入った以上、指摘を受けた側だけでなく Fleet レビュアー 2 者（`fleet_reviewer` および `fleet_completion_auditor`）を両方再起動し、客観的再検証（Re-review）と批判的再監査（Re-audit）を受領します。
-   - 両者から `[LGTM]` を獲得し、ステートマシンが正真正銘の `STATUS.RESOLVED_LGTM` に収束して初めて、Stop フックの停止ガードが解除されます。
+   - 両者から `[LGTM]` を獲得し、ステートマシンが正真正銘の `STATUS.RESOLVED_LGTM` に収束し、かつ PR Body の同期が完了して初めて、Stop フックの停止ガードが解除されます。
 
 ---
 

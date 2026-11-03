@@ -1,0 +1,25 @@
+# Antigravity Review Loop Rules
+
+本プラグイン（`antigravity-review-loop`）が有効なワークスペースでは、以下の実行規約および品質ガバナンス原則を常時遵守すること。
+
+## 1. 単一コマンド実行規約 (Single Command Execution)
+
+シェルコマンド（`run_command` ツール等）を実行する際は、以下のルールを厳格に遵守すること（違反時は `safetyGuard.js` により物理拒絶される）：
+
+1. **複数コマンドの連結禁止**:
+   - PowerShell のセミコロン（`;`）、`&&`、`||`、またはパイプ（`|`）を用いて複数のコマンドを 1 行に連結して実行してはならない。
+2. **単一コマンド実行の義務化**:
+   - 1 回のツール呼び出しにつき、必ず単一のコマンド（例: `git status` のみ、`git branch -a` のみ）として個別に実行すること。
+3. **Windows PowerShell 環境での `npm` 実行**:
+   - Windows PowerShell 環境で ExecutionPolicy により `npm`（`npm.ps1`）の実行が拒絶される場合は、`npm.cmd`（例: `npm.cmd test -- --run`）および `npx.cmd` を使用すること。
+
+## 2. 自律レビューループ・ガバナンス原則
+
+1. **設定ファイルの改ざん禁止**:
+   - `review-loop.config.json`（または `.agents/review-loop.config.json`、`.review-loop.json`）をエージェントが `write_file`、`edit_file`、またはシェルコマンドで変更することは物理的に禁止されている。
+2. **非対話テスト実行の徹底**:
+   - `npm test` 実行時はウォッチモードによるプロセスハングを防ぐため、必ず `--` 以降に非対話フラグを渡すこと（例: `npm test -- --run` または `npm.cmd test -- --run`）。
+3. **SSoT 駆動の PR Body 同期**:
+   - PR 本文は手書きせず、必ず正本である `walkthrough.md` を更新した上で `node <プラグインパス>/scripts/sync-pr-body.js`（更新時は `--update-pr`）を実行して決定論的に同期すること。
+4. **人間による最終マージ専権**:
+   - `gh pr merge` の直接実行は禁止されている。Fleet 2 者（`fleet_reviewer` & `fleet_completion_auditor`）双方の `LGTM` 獲得と CI 合格を確認した後、ユーザーにマージを依頼すること。

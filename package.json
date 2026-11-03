@@ -6,7 +6,8 @@
   "main": "state/loopState.js",
   "scripts": {
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "sync-pr-body": "node scripts/sync-pr-body.js"
   },
   "repository": {
     "type": "git",
