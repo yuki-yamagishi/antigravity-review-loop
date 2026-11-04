@@ -21,5 +21,9 @@
    - `npm test` 実行時はウォッチモードによるプロセスハングを防ぐため、必ず `--` 以降に非対話フラグを渡すこと（例: `npm test -- --run` または `npm.cmd test -- --run`）。
 3. **SSoT 駆動の PR Body 同期**:
    - PR 本文は手書きせず、必ず正本である `walkthrough.md` を更新した上で `node <プラグインパス>/scripts/sync-pr-body.js`（更新時は `--update-pr`）を実行して決定論的に同期すること。
-4. **人間による最終マージ専権**:
+4. **サブエージェントモデルの階層化 (subagentModels)**:
+   - サブエージェント起動時は `review-loop.config.json`（`config/reviewLoopConfig.js`）の `subagentModels` に準拠すること。
+   - `fleet_dor_auditor` および `fleet_completion_auditor` はデフォルトで `Model: "flash"` にダウングレードし、親エージェントが高度推論モデル（Argon 等）の場合でも定型チェックでのトークン消費を抑える。
+   - `fleet_reviewer` は `Model: "inherit"` を使用し、親モデルの推論深度を継承して具体的な反例を構築すること。
+5. **人間による最終マージ専権**:
    - `gh pr merge` の直接実行は禁止されている。Fleet 2 者（`fleet_reviewer` & `fleet_completion_auditor`）双方の `LGTM` 獲得と CI 合格を確認した後、ユーザーにマージを依頼すること。

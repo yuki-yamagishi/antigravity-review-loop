@@ -119,6 +119,12 @@ declare module '*/hooks/hookUtils.js' {
 
 declare module '*/config/reviewLoopConfig.js' {
   export const DEFAULT_CONFIG: any;
+  export const DEFAULT_SUBAGENT_MODELS: {
+    readonly dorAuditor: 'flash';
+    readonly completionAuditor: 'flash';
+    readonly codeReviewer: 'inherit';
+  };
+  export const VALID_SUBAGENT_MODELS: ReadonlySet<string>;
   export const CONFIG_FILE_NAMES: readonly string[];
   export function resolveConfigPath(projectRoot: string): string | null;
   export function mergeConfig(parsed: any): any;

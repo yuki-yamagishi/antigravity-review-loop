@@ -156,4 +156,53 @@ describe('Review Loop Config Layer (config/reviewLoopConfig.js)', () => {
     expect(fallbackConfig.disallowedPrBodyTerms).toEqual(DEFAULT_CONFIG.disallowedPrBodyTerms);
     expect(fallbackConfig.autoOverwritePrBody).toBe(DEFAULT_CONFIG.autoOverwritePrBody);
   });
+
+  it('validates subagentModels default, custom override, and invalid fallback correctly', () => {
+    // 1. Default config contains correct subagentModels
+    const defaultConfig = loadConfig(tempDir);
+    expect(defaultConfig.subagentModels).toEqual({
+      dorAuditor: 'flash',
+      completionAuditor: 'flash',
+      codeReviewer: 'inherit',
+    });
+
+    // 2. Custom partial override
+    const rootConfig = path.join(tempDir, 'review-loop.config.json');
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      subagentModels: {
+        dorAuditor: 'inherit',
+        codeReviewer: 'pro',
+      },
+    }), 'utf8');
+
+    const customConfig = loadConfig(tempDir);
+    expect(customConfig.subagentModels.dorAuditor).toBe('inherit');
+    expect(customConfig.subagentModels.codeReviewer).toBe('pro');
+    expect(customConfig.subagentModels.completionAuditor).toBe('flash'); // default preserved
+
+    // 3. Invalid model value falls back to default
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      subagentModels: {
+        dorAuditor: 'invalid-model',
+        completionAuditor: 12345,
+      },
+    }), 'utf8');
+
+    const fallbackConfig = loadConfig(tempDir);
+    expect(fallbackConfig.subagentModels.dorAuditor).toBe('flash');
+    expect(fallbackConfig.subagentModels.completionAuditor).toBe('flash');
+    expect(fallbackConfig.subagentModels.codeReviewer).toBe('inherit');
+
+    // 4. Non-object subagentModels falls back to default
+    fs.writeFileSync(rootConfig, JSON.stringify({
+      subagentModels: 'not-an-object',
+    }), 'utf8');
+
+    const fallbackConfig2 = loadConfig(tempDir);
+    expect(fallbackConfig2.subagentModels).toEqual({
+      dorAuditor: 'flash',
+      completionAuditor: 'flash',
+      codeReviewer: 'inherit',
+    });
+  });
 });

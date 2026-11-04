@@ -38,7 +38,7 @@ description: プロジェクトにおける GitHub Issue のステータスラ�
    - **GitHub Issue の実在性と DoR 達成 (Step 3)**: Issue が GitHub 上で OPEN であり、かつ `status: ready` または `status: in-progress` ラベルが付与されていること（`status: backlog` や `status: todo` のままの自律着手は物理遮断）。
    - **Issue 仕様書 (`issue.md`) の作成 (Step 4)**: プラグイン同梱の `templates/template_issue.md`（またはプロジェクトの `docs/issues/template_issue.md`）をベースに `docs/issues/ISSUE-<番号>_<slug>/issue.md` を作成し、テンプレートの未記入プレースホルダーを残さず、特に **「Why（解決すべき課題・背景）」**、**「排除するリスク」**、および **「5.1 機能受け入れシナリオ (Given-When-Then & 境界値・異常系)」** を曖昧語（「適切に」「よしなに」「〇〇の改善」「など」）を排除して具体的に定義すること。
    - **事前検証・パッチワーク点検 (`pre_verification.md`) の作成 (Step 5)**: プラグイン同梱の `templates/template_pre_verification.md`（またはプロジェクトの `docs/issues/template_pre_verification.md`）をベースに `pre_verification.md` を作成し、テンプレートの未記入プレースホルダーを残さず、特に **「重複・パッチワーク点検 (Impact & Duplication Check)」** を実施・記録すること。未実施の場合はブランチ作成が物理拒絶される。
-   - **Pre-Phase DoR 要件監査の受領 (Step 6)**: 要件の具体性および反証可能性を保証するため、サブエージェント `fleet_dor_auditor` を呼び出して DoR 監査を受領すること。指摘があれば要件を研ぎ澄まし、`READY_TO_BRANCH` の判定をもって着手準備完了（DoR 達成）とする。
+   - **Pre-Phase DoR 要件監査の受領 (Step 6)**: 要件の具体性および反証可能性を保証するため、サブエージェント `fleet_dor_auditor` を呼び出して DoR 監査を受領すること。`invoke_subagent` 実行時は設定ファイル（`subagentModels.dorAuditor`、デフォルト: `Model: "flash"`）に従って指定し、親エージェントが高度推論モデル（Argon 等）で実行されている場合でも定型チェックでの高価なトークン浪費を防ぐ。指摘があれば要件を研ぎ澄まし、`READY_TO_BRANCH` の判定をもって着手準備完了（DoR 達成）とする。
 4. **トピックブランチ作成**:
    ```bash
    git checkout -b feature/issue-<番号>-<概要>
