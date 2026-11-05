@@ -9,17 +9,20 @@
 
 1. `config/reviewLoopConfig.js`:
    - `DEFAULTS` に `subagentModels: { dorAuditor: 'flash', completionAuditor: 'flash', codeReviewer: 'inherit' }` を追加。
-   - `isSubagentModels(value)` バリデーターを実装（許可値: `'inherit' | 'flash' | 'flash_lite' | 'pro'`）。
+   - `VALID_SUBAGENT_MODELS`（許可値: `'inherit' | 'flash' | 'flash_lite' | 'pro'`）を定義。
    - `mergeConfig` にてキーごとのマージとフォールバック処理を実装。
-2. `templates/review-loop.config.example.json`:
+2. `hooks.json` & `hooks/safetyGuard.js`:
+   - `hooks.json` の `safety-guard` `PreToolUse` `matcher` に `invoke_subagent|start_subagent` を追加。
+   - `hooks/safetyGuard.js` に `detectSubagentRoleKey` と `verifySubagentModelTier` を追加し、`config.subagentModels` に基づき `Model` 引数を `overwrite` で物理強制。
+3. `templates/review-loop.config.example.json`:
    - `subagentModels` の設定例を追加。
-3. `tests/env.d.ts`:
-   - `ReviewLoopConfig` 型定義に `subagentModels` を追加。
-4. `tests/config.test.ts`:
-   - デフォルト値の検証、部分上書きの検証、無効値指定時のフォールバックおよび警告出力のテストを追加。
-5. `skills/pre-phase-dor/SKILL.md` / `skills/review-self-healing/SKILL.md` / `rules/AGENTS.md`:
-   - `invoke_subagent` 実行時のモデルティア指定規約を明記。
-6. `docs/issues/ISSUE-009_subagent_model_tiering/walkthrough.md`:
+4. `tests/env.d.ts`:
+   - `reviewLoopConfig.js` および `safetyGuard.js` の型定義を更新。
+5. `tests/config.test.ts` & `tests/hooks.test.ts`:
+   - デフォルト値の検証、部分上書きの検証、無効値指定時のフォールバック、および `safetyGuard.js` による `PreToolUse` `overwrite` の単体テストを追加。
+6. `skills/issue-lifecycle/SKILL.md` / `skills/review-self-healing/SKILL.md` / `rules/AGENTS.md`:
+   - `invoke_subagent` 実行時のモデルティア指定規約および物理強制を明記。
+7. `docs/issues/ISSUE-009_subagent_model_tiering/walkthrough.md`:
    - 実装成果と検証結果を記録。
 
 ---

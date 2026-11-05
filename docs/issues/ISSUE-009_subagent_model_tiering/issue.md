@@ -19,12 +19,15 @@
 1. **`reviewLoopConfig.js` / `review-loop.config.json` における `subagentModels` 設定の追加**:
    - `subagentModels: { dorAuditor: "flash", completionAuditor: "flash", codeReviewer: "inherit" }` をデフォルトとしてサポート。
    - 各キー（`dorAuditor`, `completionAuditor`, `codeReviewer`）に `inherit` / `flash` / `flash_lite` / `pro` の許可値をバリデーション。
-2. **`templates/review-loop.config.example.json` の更新**:
+2. **`hooks/safetyGuard.js` および `hooks.json` による `invoke_subagent` モデルティアの物理強制**:
+   - `hooks.json` の `safety-guard`（`PreToolUse`）の `matcher` に `invoke_subagent|start_subagent` を追加。
+   - `safetyGuard.js` に `detectSubagentRoleKey` および `verifySubagentModelTier` を実装し、Fleet サブエージェント起動時に `Model` 引数が `config.subagentModels` と異なる場合は `{ decision: 'allow', overwrite: { Model: expectedModel } }` を返して物理的に自動書き換えする。
+3. **`templates/review-loop.config.example.json` の更新**:
    - `subagentModels` の設定例とコメントを追加。
-3. **`skills/pre-phase-dor/SKILL.md`、`skills/review-self-healing/SKILL.md`、`rules/AGENTS.md` の更新**:
-   - サブエージェント起動時（`invoke_subagent`）に、設定された `subagentModels`（デフォルト: `dorAuditor` と `completionAuditor` は `flash`、`codeReviewer` は `inherit`）に従って `Model` 引数を渡す手順を規定。
-4. **単体テストの拡充 (`tests/config.test.ts`)**:
-   - `subagentModels` のデフォルト値取得、正常値バリデーション、異常値フォールバックのテストを追加。
+4. **`skills/issue-lifecycle/SKILL.md`、`skills/review-self-healing/SKILL.md`、`rules/AGENTS.md` の更新**:
+   - サブエージェント起動時（`invoke_subagent`）に、設定された `subagentModels`（デフォルト: `dorAuditor` と `completionAuditor` は `flash`、`codeReviewer` は `inherit`）に従って `Model` 引数を渡す手順および別モデルで起動済みのサブエージェントへの `send_message` 流用禁止を規定。
+5. **単体テストの拡充 (`tests/config.test.ts`, `tests/hooks.test.ts`)**:
+   - `subagentModels` のデフォルト値取得、正常値バリデーション、異常値フォールバック、および `safetyGuard.js` による `PreToolUse` `overwrite` のテストを追加。
 
 ---
 

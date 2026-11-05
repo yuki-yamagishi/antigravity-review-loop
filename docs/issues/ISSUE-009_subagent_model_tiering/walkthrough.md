@@ -8,10 +8,13 @@
 1. **`reviewLoopConfig.js` / `review-loop.config.json` における `subagentModels` サポート**:
    - `subagentModels: { dorAuditor: 'flash', completionAuditor: 'flash', codeReviewer: 'inherit' }` をデフォルトとして定義。
    - `inherit`, `flash`, `flash_lite`, `pro` の 4 ティアを安全に検証し、無効値は安全にフォールバック。
-2. **テンプレート・スキルドキュメント・ルールの整備**:
-   - `templates/review-loop.config.example.json`、`skills/issue-lifecycle/SKILL.md`、`skills/review-self-healing/SKILL.md`、`rules/AGENTS.md` にサブエージェントモデル指定規約を明記。
-3. **テストと型定義の整備**:
-   - `tests/config.test.ts`、`tests/env.d.ts` にテストと型定義を追加。
+2. **`hooks/safetyGuard.js` および `hooks.json` による `PreToolUse` モデルティア物理強制**:
+   - `hooks.json` の `safety-guard`（`PreToolUse`）の `matcher` に `invoke_subagent|start_subagent` を追加。
+   - `hooks/safetyGuard.js` に `detectSubagentRoleKey` と `verifySubagentModelTier` を実装し、Fleet サブエージェント起動時に `Model` 引数が `config.subagentModels` と異なる場合は `{ decision: 'allow', overwrite: { Model: expectedModel } }` を返して物理的に自動書き換えする仕組みを導入。
+3. **テンプレート・スキルドキュメント・ルールの整備**:
+   - `templates/review-loop.config.example.json`、`skills/issue-lifecycle/SKILL.md`、`skills/review-self-healing/SKILL.md`、`rules/AGENTS.md` にサブエージェントモデル指定規約および物理強制を明記。
+4. **テストと型定義の整備**:
+   - `tests/config.test.ts`、`tests/hooks.test.ts`、`tests/env.d.ts` にテストと型定義を追加。
 
 ## 3. レビュー対応履歴
 
@@ -22,6 +25,7 @@
 ## 4. 検証結果
 
 - `npx.cmd tsc --noEmit`: エラー 0 件（Exit Code 0）で PASS。
-- `npm.cmd test -- --run`: 全 11 テストファイル、197 件のテストが PASS。
+- `npm.cmd test -- --run`: 全 11 テストファイル、199 件のテストが PASS。
   - `tests/config.test.ts` (10 tests PASS): `subagentModels` のデフォルト値取得、部分上書き、不正値フォールバックのテストを含む。
+  - `tests/hooks.test.ts` (85 tests PASS): `detectSubagentRoleKey` および `verifySubagentModelTier` による `PreToolUse` `overwrite` 物理強制テストを含む。
   - その他既存テストスイート全件 PASS。

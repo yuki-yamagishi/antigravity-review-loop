@@ -73,6 +73,8 @@ declare module '*/hooks/stopHook.js' {
 }
 
 declare module '*/hooks/safetyGuard.js' {
+  export function detectSubagentRoleKey(args?: any): 'dorAuditor' | 'completionAuditor' | 'codeReviewer' | null;
+  export function verifySubagentModelTier(args?: any, config?: any): { decision: string; reason?: string; overwrite?: any };
   export function verifySingleCommandExecution(commandLine: string): { decision: string; reason?: string };
   export function handleSafetyGuard(payload?: any, options?: any): { decision: string; reason?: string; overwrite?: any };
 }

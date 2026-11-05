@@ -7,7 +7,7 @@
  * - readyLabels         -> hooks/branchDoRGate.js
  * - requiredAxisDocs    -> hooks/prePrAuditGate.js
  * - adrDir, ssotFile    -> hooks/prePrAuditGate.js
- * - subagentModels      -> skills/issue-lifecycle, skills/review-self-healing
+ * - subagentModels      -> hooks/safetyGuard.js, skills/issue-lifecycle, skills/review-self-healing
  *
  * Invalid values are rejected (fallback to the default for that key) and a warning is
  * written to stderr so misconfiguration is observable.
