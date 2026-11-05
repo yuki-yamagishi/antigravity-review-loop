@@ -6,13 +6,15 @@
  * 2. Prohibits interactive watch tests.
  * 3. Prohibits network commands (curl, Invoke-WebRequest, Invoke-RestMethod, iwr, irm)
  *    without explicit positive timeout to prevent process hangs.
+ * 4. Enforces subagentModels tier (e.g. downgrading dorAuditor & completionAuditor to "flash")
+ *    on invoke_subagent / start_subagent tool calls via PreToolUse overwrite.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readStdinJson, writeStdoutJson, findProjectRoot } from './hookUtils.js';
-import { loadConfig } from '../config/reviewLoopConfig.js';
+import { loadConfig, DEFAULT_SUBAGENT_MODELS } from '../config/reviewLoopConfig.js';
 
 /**
  * Validates that gh pr merge is not executed directly by autonomous agents.
@@ -62,6 +64,66 @@ const FILE_EDIT_TOOLS = new Set([
   'replace_file_content',
   'multi_replace_file_content',
 ]);
+
+const SUBAGENT_INVOKE_TOOLS = new Set([
+  'invoke_subagent',
+  'start_subagent',
+]);
+
+/**
+ * Resolves the Fleet subagent role key ('dorAuditor' | 'completionAuditor' | 'codeReviewer' | null)
+ * from invoke_subagent / start_subagent tool arguments (TypeName, Role, Prompt).
+ */
+export function detectSubagentRoleKey(args = {}) {
+  if (!args || typeof args !== 'object') return null;
+  const typeAndRole = `${args.TypeName || ''} ${args.Role || ''}`;
+  if (/\b(?:fleet_dor_auditor|dor_auditor)\b/i.test(typeAndRole) || /\bdor\b.*\bauditor\b/i.test(typeAndRole)) {
+    return 'dorAuditor';
+  }
+  if (/\b(?:fleet_completion_auditor|completion_auditor)\b/i.test(typeAndRole) || /\bcompletion\b.*\bauditor\b/i.test(typeAndRole)) {
+    return 'completionAuditor';
+  }
+  if (/\b(?:fleet_reviewer|code_reviewer)\b/i.test(typeAndRole) || /\bcode\b.*\breviewer\b/i.test(typeAndRole)) {
+    return 'codeReviewer';
+  }
+
+  const prompt = String(args.Prompt || '');
+  if (/\bfleet_dor_auditor\b/i.test(prompt)) return 'dorAuditor';
+  if (/\bfleet_completion_auditor\b/i.test(prompt)) return 'completionAuditor';
+  if (/\bfleet_reviewer\b/i.test(prompt)) return 'codeReviewer';
+
+  return null;
+}
+
+/**
+ * Enforces configured subagentModels tier on invoke_subagent / start_subagent calls.
+ * When the requested Model differs from the configured tier (e.g. 'inherit' instead of 'flash'),
+ * returns an 'allow' decision with 'overwrite: { Model: expectedModel }' so the downgrade/tier
+ * is physically applied even if the parent agent omitted or mis-specified Model.
+ */
+export function verifySubagentModelTier(args = {}, config = {}) {
+  const safeArgs = args && typeof args === 'object' ? args : {};
+  const roleKey = detectSubagentRoleKey(safeArgs);
+  if (!roleKey) {
+    return { decision: 'allow' };
+  }
+
+  const subagentModels = (config && config.subagentModels) || DEFAULT_SUBAGENT_MODELS;
+  const expectedModel = subagentModels[roleKey] || DEFAULT_SUBAGENT_MODELS[roleKey];
+  const requestedModel = typeof safeArgs.Model === 'string' ? safeArgs.Model.toLowerCase().trim() : '';
+
+  if (requestedModel === expectedModel) {
+    return { decision: 'allow' };
+  }
+
+  return {
+    decision: 'allow',
+    overwrite: {
+      Model: expectedModel,
+    },
+    reason: `[SafetyGuard] Enforced subagent model tier "${expectedModel}" for ${roleKey} (requested: "${safeArgs.Model || 'omitted'}") per review-loop subagentModels configuration.`,
+  };
+}
 
 const CONFIG_NAME_PATTERN = /(?:^|[\\/\s"'])(?:\.agents[\\/])?(?:review-loop\.config\.json|\.review-loop\.json)\b/i;
 const WRITE_INDICATOR = />|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|sc|ac|ri|clc|ni|mi|cpi|rni|touch|tee|sed|mv|cp|rm|del|ren|truncate|git\s+(?:checkout|restore|stash|reset|clean))\b/i;
@@ -213,14 +275,20 @@ export function handleSafetyGuard(payload = {}, options = {}) {
     return verifyConfigNotTampered(toolName, args, '');
   }
 
+  const currentScriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = options.projectRoot !== undefined ? options.projectRoot : findProjectRoot(currentScriptDir);
+  const config = options.config || (projectRoot ? loadConfig(projectRoot) : {});
+
+  // Enforce subagentModels tier on invoke_subagent / start_subagent
+  if (SUBAGENT_INVOKE_TOOLS.has(toolName)) {
+    return verifySubagentModelTier(args, config);
+  }
+
   if (toolName !== 'run_command' || !commandLine) {
     return { decision: 'allow' };
   }
 
   const trimmed = commandLine.trim();
-  const currentScriptDir = path.dirname(fileURLToPath(import.meta.url));
-  const projectRoot = options.projectRoot !== undefined ? options.projectRoot : findProjectRoot(currentScriptDir);
-  const config = options.config || (projectRoot ? loadConfig(projectRoot) : {});
 
   // Safety verification pipeline
   const checks = [

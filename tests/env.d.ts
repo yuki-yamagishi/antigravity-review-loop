@@ -73,6 +73,8 @@ declare module '*/hooks/stopHook.js' {
 }
 
 declare module '*/hooks/safetyGuard.js' {
+  export function detectSubagentRoleKey(args?: any): 'dorAuditor' | 'completionAuditor' | 'codeReviewer' | null;
+  export function verifySubagentModelTier(args?: any, config?: any): { decision: string; reason?: string; overwrite?: any };
   export function verifySingleCommandExecution(commandLine: string): { decision: string; reason?: string };
   export function handleSafetyGuard(payload?: any, options?: any): { decision: string; reason?: string; overwrite?: any };
 }
@@ -119,6 +121,12 @@ declare module '*/hooks/hookUtils.js' {
 
 declare module '*/config/reviewLoopConfig.js' {
   export const DEFAULT_CONFIG: any;
+  export const DEFAULT_SUBAGENT_MODELS: {
+    readonly dorAuditor: 'flash';
+    readonly completionAuditor: 'flash';
+    readonly codeReviewer: 'inherit';
+  };
+  export const VALID_SUBAGENT_MODELS: ReadonlySet<string>;
   export const CONFIG_FILE_NAMES: readonly string[];
   export function resolveConfigPath(projectRoot: string): string | null;
   export function mergeConfig(parsed: any): any;

@@ -5,7 +5,11 @@ import os from 'os';
 import { execSync } from 'child_process';
 import { LoopStateMachine, STATUS } from '../state/loopState.js';
 import { handleStop } from '../hooks/stopHook.js';
-import { handleSafetyGuard } from '../hooks/safetyGuard.js';
+import {
+  handleSafetyGuard,
+  detectSubagentRoleKey,
+  verifySubagentModelTier,
+} from '../hooks/safetyGuard.js';
 import {
   handleBranchDoRGate,
   escapePathForRegex,
@@ -675,6 +679,109 @@ describe('Lifecycle Hooks (antigravity-review-loop/hooks/)', () => {
       const webParsed = JSON.parse(webStdout.trim());
       expect(webParsed.decision).toBe('deny');
       expect(webParsed.reason).toContain('Invoke-WebRequest');
+    });
+
+    it('detects fleet subagent roles from TypeName or Role (detectSubagentRoleKey)', () => {
+      expect(detectSubagentRoleKey({ TypeName: 'fleet_dor_auditor' })).toBe('dorAuditor');
+      expect(detectSubagentRoleKey({ Role: 'DoR Requirements Auditor' })).toBe('dorAuditor');
+      expect(detectSubagentRoleKey({ TypeName: 'fleet_completion_auditor' })).toBe('completionAuditor');
+      expect(detectSubagentRoleKey({ Role: 'Fleet Completion Auditor' })).toBe('completionAuditor');
+      expect(detectSubagentRoleKey({ TypeName: 'fleet_reviewer' })).toBe('codeReviewer');
+      expect(detectSubagentRoleKey({ Role: 'Fleet Code Reviewer' })).toBe('codeReviewer');
+      expect(detectSubagentRoleKey({ TypeName: 'firestore-rules-author', Role: 'Firestore Rules Specialist' })).toBeNull();
+      expect(detectSubagentRoleKey(null)).toBeNull();
+    });
+
+    it('enforces subagentModels via PreToolUse overwrite on invoke_subagent / start_subagent', () => {
+      // 1. dorAuditor with Model: "inherit" is overwritten to "flash"
+      const resDor = handleSafetyGuard({
+        toolCall: {
+          name: 'invoke_subagent',
+          args: {
+            TypeName: 'fleet_dor_auditor',
+            Role: 'DoR Requirements Auditor',
+            Model: 'inherit',
+            Prompt: 'Audit DoR',
+          },
+        },
+      });
+      expect(resDor.decision).toBe('allow');
+      expect(resDor.overwrite).toEqual({ Model: 'flash' });
+      expect(resDor.reason).toContain('Enforced subagent model tier "flash" for dorAuditor');
+
+      // 2. completionAuditor with omitted Model is overwritten to "flash"
+      const resComp = handleSafetyGuard({
+        toolCall: {
+          name: 'start_subagent',
+          args: {
+            TypeName: 'research',
+            Role: 'Fleet Completion Auditor',
+            Prompt: 'Audit completion',
+          },
+        },
+      });
+      expect(resComp.decision).toBe('allow');
+      expect(resComp.overwrite).toEqual({ Model: 'flash' });
+
+      // 3. completionAuditor already matching "flash" is allowed without overwrite
+      const resCompExact = handleSafetyGuard({
+        toolCall: {
+          name: 'invoke_subagent',
+          args: {
+            TypeName: 'fleet_completion_auditor',
+            Role: 'Fleet Completion Auditor',
+            Model: 'flash',
+          },
+        },
+      });
+      expect(resCompExact.decision).toBe('allow');
+      expect(resCompExact.overwrite).toBeUndefined();
+
+      // 4. codeReviewer with Model: "flash" is overwritten to default "inherit"
+      const resRevMismatch = handleSafetyGuard({
+        toolCall: {
+          name: 'invoke_subagent',
+          args: {
+            TypeName: 'fleet_reviewer',
+            Role: 'Fleet Code Reviewer',
+            Model: 'flash',
+          },
+        },
+      });
+      expect(resRevMismatch.decision).toBe('allow');
+      expect(resRevMismatch.overwrite).toEqual({ Model: 'inherit' });
+
+      // 5. Custom config override is respected
+      const resCustom = verifySubagentModelTier(
+        {
+          TypeName: 'fleet_reviewer',
+          Role: 'Fleet Code Reviewer',
+          Model: 'inherit',
+        },
+        {
+          subagentModels: {
+            dorAuditor: 'flash_lite',
+            completionAuditor: 'flash',
+            codeReviewer: 'pro',
+          },
+        }
+      );
+      expect(resCustom.decision).toBe('allow');
+      expect(resCustom.overwrite).toEqual({ Model: 'pro' });
+
+      // 6. Non-fleet subagent is allowed untouched
+      const resOther = handleSafetyGuard({
+        toolCall: {
+          name: 'invoke_subagent',
+          args: {
+            TypeName: 'firestore-rules-author',
+            Role: 'Firestore Rules Specialist',
+            Model: 'inherit',
+          },
+        },
+      });
+      expect(resOther.decision).toBe('allow');
+      expect(resOther.overwrite).toBeUndefined();
     });
   });
 

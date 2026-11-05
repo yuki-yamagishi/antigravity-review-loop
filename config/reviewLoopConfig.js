@@ -7,6 +7,7 @@
  * - readyLabels         -> hooks/branchDoRGate.js
  * - requiredAxisDocs    -> hooks/prePrAuditGate.js
  * - adrDir, ssotFile    -> hooks/prePrAuditGate.js
+ * - subagentModels      -> hooks/safetyGuard.js, skills/issue-lifecycle, skills/review-self-healing
  *
  * Invalid values are rejected (fallback to the default for that key) and a warning is
  * written to stderr so misconfiguration is observable.
@@ -14,6 +15,14 @@
 
 import fs from 'fs';
 import path from 'path';
+
+export const VALID_SUBAGENT_MODELS = Object.freeze(new Set(['inherit', 'flash', 'flash_lite', 'pro']));
+
+export const DEFAULT_SUBAGENT_MODELS = Object.freeze({
+  dorAuditor: 'flash',
+  completionAuditor: 'flash',
+  codeReviewer: 'inherit',
+});
 
 const DEFAULTS = {
   allowedTestCommands: [],
@@ -40,6 +49,11 @@ const DEFAULTS = {
     'やめました',
   ],
   autoOverwritePrBody: false,
+  subagentModels: {
+    dorAuditor: 'flash',
+    completionAuditor: 'flash',
+    codeReviewer: 'inherit',
+  },
 };
 
 function cloneDefaults() {
@@ -50,6 +64,7 @@ function cloneDefaults() {
     requiredAxisDocs: [...DEFAULTS.requiredAxisDocs],
     codeDirs: [...DEFAULTS.codeDirs],
     disallowedPrBodyTerms: [...DEFAULTS.disallowedPrBodyTerms],
+    subagentModels: { ...DEFAULTS.subagentModels },
   };
 }
 
@@ -111,6 +126,27 @@ export function mergeConfig(parsed) {
     if (key === '$schema') continue;
     if (!(key in DEFAULTS)) {
       warn(`unknown key "${key}" ignored.`);
+      continue;
+    }
+    if (key === 'subagentModels') {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const target = { ...config.subagentModels };
+        const allowedKeys = ['dorAuditor', 'completionAuditor', 'codeReviewer'];
+        for (const [subKey, subVal] of Object.entries(value)) {
+          if (!allowedKeys.includes(subKey)) {
+            warn(`unknown key "${subKey}" in subagentModels ignored.`);
+            continue;
+          }
+          if (typeof subVal === 'string' && VALID_SUBAGENT_MODELS.has(subVal.toLowerCase().trim())) {
+            target[subKey] = subVal.toLowerCase().trim();
+          } else {
+            warn(`invalid value for subagentModels.${subKey} ("${subVal}"); using default "${DEFAULTS.subagentModels[subKey]}".`);
+          }
+        }
+        config.subagentModels = target;
+      } else {
+        warn(`invalid value for "subagentModels"; using default.`);
+      }
       continue;
     }
     let valid = false;

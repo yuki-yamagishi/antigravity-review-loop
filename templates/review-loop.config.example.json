@@ -37,5 +37,10 @@
     "戻した",
     "やめました"
   ],
-  "autoOverwritePrBody": false
+  "autoOverwritePrBody": false,
+  "subagentModels": {
+    "dorAuditor": "flash",
+    "completionAuditor": "flash",
+    "codeReviewer": "inherit"
+  }
 }
